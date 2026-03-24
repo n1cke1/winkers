@@ -65,29 +65,61 @@ def create_server(root: Path) -> Server:
 
 
 class _FilteredStdin(io.RawIOBase):
-    """Wraps stdin.buffer, skipping empty lines that break JSON-RPC parsing.
+    """Wraps stdin.buffer, stripping bare newlines that break JSON-RPC.
 
-    Some MCP clients (e.g. Claude Code) send empty lines between messages.
-    The MCP SDK tries to parse them as JSON, causing errors.
+    Claude Code sends \\n between messages. anyio on Windows reads via
+    read(8192), not readline(). So we must filter in read() and readinto().
     """
 
     def __init__(self, raw: io.RawIOBase) -> None:
         self._raw = raw
+        self._buf = b""
 
-    def readinto(self, b: bytearray) -> int | None:
-        return self._raw.readinto(b)
+    def _fill(self, size: int) -> None:
+        """Read from raw and strip lone whitespace-only segments."""
+        while len(self._buf) < size:
+            chunk = self._raw.read(size)
+            if not chunk:
+                break
+            # Remove bare empty lines (\n or \r\n between JSON messages)
+            filtered = b"\n".join(
+                line for line in chunk.split(b"\n")
+                if line.strip()
+            )
+            if filtered:
+                self._buf += filtered + b"\n"
 
     def read(self, size: int = -1) -> bytes:
-        return self._raw.read(size)
+        if size <= 0:
+            # Read all remaining
+            rest = self._raw.read(-1)
+            if not rest and not self._buf:
+                return b""
+            data = self._buf + rest
+            self._buf = b""
+            return b"\n".join(line for line in data.split(b"\n") if line.strip()) + b"\n"
+        self._fill(size)
+        if not self._buf:
+            return b""
+        out = self._buf[:size]
+        self._buf = self._buf[size:]
+        return out
+
+    def readinto(self, b: bytearray) -> int | None:
+        data = self.read(len(b))
+        if not data:
+            return 0
+        n = len(data)
+        b[:n] = data
+        return n
 
     def readline(self, size: int = -1) -> bytes:
         while True:
             line = self._raw.readline(size)
-            if not line:  # EOF
+            if not line:
                 return line
-            if line.strip():  # non-empty
+            if line.strip():
                 return line
-            # empty line — skip
 
     def readable(self) -> bool:
         return True
@@ -97,7 +129,7 @@ def run(root: Path | None = None) -> None:
     if root is None:
         root = Path.cwd()
 
-    # Wrap stdin to skip empty lines before MCP SDK sees them
+    # Wrap stdin to filter empty lines before MCP SDK parses JSON-RPC
     sys.stdin = io.TextIOWrapper(_FilteredStdin(sys.stdin.buffer))
 
     server = create_server(root)
