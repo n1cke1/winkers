@@ -1,0 +1,39 @@
+---
+description: Architectural context workflow using Winkers dependency graph
+globs:
+  - "**/*.py"
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.js"
+  - "**/*.jsx"
+  - "**/*.go"
+  - "**/*.java"
+alwaysApply: false
+---
+
+# Winkers — Architectural Context
+
+Before modifying code, use the Winkers MCP tools to understand the
+dependency graph and avoid breaking callers.
+
+## Workflow
+
+1. **Understand structure**
+   `map(detail="zones")` — see zones, hotspots, dependency directions.
+
+2. **Inspect the area**
+   `map(detail="files", zone="<zone>")` — files with locked/free functions.
+
+3. **Get constraints**
+   `scope(file="<path>")` — for each file you'll modify.
+   Returns locked functions, their callers, safe vs breaking changes.
+
+4. **After writing code**
+   `analyze(files=["<changed>", ...])` — verify no violations.
+
+## Key rules
+
+- **locked** function = has callers depending on signature.
+  Never change param types, order, or return type without updating all callers.
+- **free** function = no callers. Modify freely.
+- Zero violations from `analyze` before committing.

@@ -1,0 +1,85 @@
+{
+  "_comment": "Example output from winkers map + scope on a Python project",
+
+  "map_zones": {
+    "project": ".",
+    "languages": ["python"],
+    "total_files": 4,
+    "total_functions": 9,
+    "zones": [
+      {
+        "name": "api",
+        "files": 1,
+        "functions": 2,
+        "imports_from": ["modules"],
+        "imported_by": []
+      },
+      {
+        "name": "modules",
+        "files": 2,
+        "functions": 6,
+        "imports_from": [],
+        "imported_by": ["api"]
+      }
+    ],
+    "hotspots": [
+      {
+        "fn": "modules/pricing.py::calculate_price",
+        "file": "modules/pricing.py",
+        "call_count": 2,
+        "locked": true
+      }
+    ]
+  },
+
+  "scope_calculate_price": {
+    "function": {
+      "id": "modules/pricing.py::calculate_price",
+      "file": "modules/pricing.py",
+      "line_start": 10,
+      "line_end": 20,
+      "signature": "(item_id: int, qty: int) -> float",
+      "docstring": "Calculate the price for an item given quantity.",
+      "complexity": 3,
+      "is_async": false,
+      "locked": true
+    },
+    "callers": [
+      {
+        "fn": "modules/inventory.py::check_stock",
+        "file": "modules/inventory.py",
+        "line": 15,
+        "expression": "calculate_price(item_id, qty)",
+        "confidence": 1.0
+      },
+      {
+        "fn": "api/prices.py::get_price",
+        "file": "api/prices.py",
+        "line": 8,
+        "expression": "pricing.calculate_price(item_id, qty)",
+        "confidence": 0.9
+      }
+    ],
+    "callees": [
+      {
+        "fn": "modules/pricing.py::apply_discount",
+        "expression": "apply_discount(price, item_id)"
+      }
+    ],
+    "constraints": {
+      "callers_expect": "(item_id: int, qty: int) -> float",
+      "safe_changes": [
+        "modify function body",
+        "add optional parameters with defaults",
+        "add overloaded variant"
+      ],
+      "breaking_changes": [
+        "change existing parameter types",
+        "change parameter order",
+        "change return type",
+        "remove parameters"
+      ]
+    },
+    "recent_changes": []
+  }
+}

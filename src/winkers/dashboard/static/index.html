@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Winkers — Dependency Graph</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: #1a1d27; border-bottom: 1px solid #2d3148; flex-shrink: 0; }
+  header h1 { font-size: 18px; font-weight: 700; color: #a78bfa; letter-spacing: -0.3px; }
+  header span { font-size: 12px; color: #64748b; }
+
+  #toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #search { padding: 5px 10px; border-radius: 6px; border: 1px solid #2d3148; background: #0f1117; color: #e2e8f0; font-size: 13px; width: 200px; }
+  select, button { padding: 5px 10px; border-radius: 6px; border: 1px solid #2d3148; background: #1e2235; color: #e2e8f0; font-size: 13px; cursor: pointer; }
+  button:hover { background: #2d3148; }
+  button.active { background: #4f46e5; border-color: #4f46e5; }
+
+  #main { display: flex; flex: 1; overflow: hidden; }
+  #cy { flex: 1; }
+
+  #sidebar { width: 300px; background: #1a1d27; border-left: 1px solid #2d3148; overflow-y: auto; padding: 16px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+  #sidebar.hidden { display: none; }
+
+  .card { background: #0f1117; border-radius: 8px; padding: 12px; border: 1px solid #2d3148; }
+  .card h3 { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .fn-name { font-size: 14px; font-weight: 700; color: #a78bfa; word-break: break-all; }
+  .fn-file { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .badge-locked { background: #7f1d1d; color: #fca5a5; }
+  .badge-free { background: #14532d; color: #86efac; }
+  .badge-async { background: #1e3a5f; color: #93c5fd; }
+  .param-list { font-size: 12px; color: #94a3b8; font-family: monospace; }
+  .caller-item { font-size: 12px; color: #a78bfa; cursor: pointer; padding: 3px 0; border-bottom: 1px solid #1a1d27; }
+  .caller-item:hover { color: #c4b5fd; }
+  .docstring { font-size: 12px; color: #94a3b8; font-style: italic; line-height: 1.5; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; padding: 2px 0; }
+  .stat-val { color: #e2e8f0; font-weight: 600; }
+
+  #tooltip { position: fixed; pointer-events: none; background: #1e2235; border: 1px solid #4f46e5; border-radius: 8px; padding: 10px 14px; font-size: 12px; max-width: 360px; z-index: 999; display: none; line-height: 1.6; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+  #tooltip .tt-name { font-weight: 700; color: #a78bfa; font-size: 13px; }
+  #tooltip .tt-file { color: #64748b; font-size: 11px; }
+  #tooltip .tt-sig { color: #94a3b8; font-family: monospace; font-size: 11px; margin-top: 4px; }
+  #tooltip .tt-section { color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }
+  #tooltip .tt-val { color: #e2e8f0; }
+
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1e2235; border: 1px solid #4f46e5; padding: 8px 16px; border-radius: 8px; font-size: 13px; display: none; z-index: 999; }
+
+  #history-panel { display: none; position: fixed; top: 56px; right: 0; width: 320px; height: calc(100vh - 56px); background: #1a1d27; border-left: 1px solid #2d3148; overflow-y: auto; padding: 16px; z-index: 100; }
+  #history-panel h2 { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: #a78bfa; }
+  .snap-row { padding: 8px; border-radius: 6px; background: #0f1117; margin-bottom: 6px; border: 1px solid #2d3148; font-size: 12px; }
+  .snap-row .snap-ts { color: #94a3b8; margin-bottom: 4px; }
+  .snap-row .snap-stats { display: flex; gap: 12px; }
+  .snap-stat { color: #e2e8f0; }
+
+  /* Context menu */
+  #ctx-menu { position: fixed; background: #1e2235; border: 1px solid #4f46e5; border-radius: 8px; padding: 4px 0; z-index: 1000; display: none; min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+  #ctx-menu div { padding: 8px 14px; font-size: 13px; cursor: pointer; color: #e2e8f0; }
+  #ctx-menu div:hover { background: #2d3148; }
+
+  /* Source modal */
+  #source-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1a1d27; border: 1px solid #4f46e5; border-radius: 12px; padding: 20px; z-index: 1001; display: none; max-width: 700px; width: 90%; max-height: 80vh; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+  #source-modal .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  #source-modal .modal-title { font-size: 14px; font-weight: 700; color: #a78bfa; }
+  #source-modal .modal-file { font-size: 11px; color: #64748b; }
+  #source-modal .modal-close { cursor: pointer; color: #64748b; font-size: 18px; padding: 4px 8px; border-radius: 4px; }
+  #source-modal .modal-close:hover { background: #2d3148; color: #e2e8f0; }
+  #source-modal pre { background: #0f1117; border-radius: 8px; padding: 12px; overflow: auto; max-height: calc(80vh - 80px); font-size: 13px; line-height: 1.5; color: #e2e8f0; font-family: 'Cascadia Code', 'Fira Code', monospace; }
+  #modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: none; }
+
+  /* Debt layer colors */
+  .debt-high { }
+  .debt-medium { }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⬡ Winkers</h1>
+  <div id="toolbar">
+    <input id="search" type="text" placeholder="Search functions…">
+    <select id="zone-filter"><option value="">All zones</option></select>
+    <select id="layout-select">
+      <option value="cose">Force (cose)</option>
+      <option value="breadthfirst">Tree</option>
+      <option value="circle">Circle</option>
+      <option value="grid">Grid</option>
+    </select>
+    <button id="fit-btn">Fit</button>
+    <button id="preview-btn">Preview</button>
+    <button id="debt-btn">Tech Debt</button>
+    <button id="history-btn">History</button>
+  </div>
+  <span id="stats-bar"></span>
+</header>
+
+<div id="tooltip"></div>
+
+<div id="main">
+  <div id="cy"></div>
+  <div id="sidebar" class="hidden">
+    <div class="card" id="card-fn">
+      <div class="fn-name" id="fn-name">—</div>
+      <div class="fn-file" id="fn-file"></div>
+      <div style="margin-top:6px" id="fn-badges"></div>
+    </div>
+    <div class="card">
+      <h3>Signature</h3>
+      <div class="param-list" id="fn-sig"></div>
+    </div>
+    <div class="card" id="card-doc" style="display:none">
+      <h3>Docstring</h3>
+      <div class="docstring" id="fn-doc"></div>
+    </div>
+    <div class="card">
+      <h3>Stats</h3>
+      <div class="stat-row"><span>Callers</span><span class="stat-val" id="fn-callers">0</span></div>
+      <div class="stat-row"><span>Lines</span><span class="stat-val" id="fn-lines"></span></div>
+      <div class="stat-row"><span>Complexity</span><span class="stat-val" id="fn-complexity">0</span></div>
+    </div>
+    <div class="card" id="card-callers" style="display:none">
+      <h3>Called by</h3>
+      <div id="fn-callers-list"></div>
+    </div>
+    <div class="card" id="card-callees" style="display:none">
+      <h3>Calls</h3>
+      <div id="fn-callees-list"></div>
+    </div>
+  </div>
+</div>
+
+<div id="history-panel">
+  <h2>Snapshot History</h2>
+  <div id="history-list"></div>
+</div>
+
+<div id="ctx-menu">
+  <div id="ctx-source">View source</div>
+  <div id="ctx-preview">Preview dependencies</div>
+</div>
+
+<div id="modal-overlay"></div>
+<div id="source-modal">
+  <div class="modal-header">
+    <div>
+      <div class="modal-title" id="modal-fn-name"></div>
+      <div class="modal-file" id="modal-fn-file"></div>
+    </div>
+    <span class="modal-close" id="modal-close">&times;</span>
+  </div>
+  <pre><code id="modal-source"></code></pre>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const ZONE_COLORS = [
+  '#4f46e5','#0891b2','#059669','#d97706','#dc2626','#7c3aed','#db2777','#0284c7',
+];
+let cy = null;
+let graphData = null;
+let semanticData = null;
+let zoneColorMap = {};
+let previewMode = false;
+let previewTarget = null;
+let debtMode = false;
+let debtData = null;
+let ctxTarget = null;
+
+async function loadGraph(zone = '') {
+  const url = zone ? `/api/graph?zone=${encodeURIComponent(zone)}` : '/api/graph';
+  const res = await fetch(url);
+  if (!res.ok) { toast('Graph not loaded. Run winkers init first.'); return; }
+  graphData = await res.json();
+  buildZoneColors(graphData.nodes);
+  renderGraph(graphData);
+  populateZoneFilter(graphData.nodes);
+  updateStats(graphData);
+}
+
+function buildZoneColors(nodes) {
+  const zones = [...new Set(nodes.map(n => n.data.zone))].sort();
+  zoneColorMap = {};
+  zones.forEach((z, i) => { zoneColorMap[z] = ZONE_COLORS[i % ZONE_COLORS.length]; });
+}
+
+function nodeColor(data) {
+  if (data.is_async) return '#a78bfa';
+  return zoneColorMap[data.zone] || '#6366f1';
+}
+
+function renderGraph(data) {
+  const elements = [
+    ...data.nodes.map(n => ({
+      group: 'nodes',
+      data: n.data,
+    })),
+    ...data.edges.map(e => ({
+      group: 'edges',
+      data: e.data,
+    })),
+  ];
+
+  if (cy) cy.destroy();
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements,
+    style: [
+      {
+        selector: 'node',
+        style: {
+          'background-color': n => nodeColor(n.data()),
+          'border-width': n => n.data('locked') ? 3 : 0,
+          'border-color': '#ef4444',
+          'label': 'data(label)',
+          'color': '#e2e8f0',
+          'font-size': 10,
+          'text-valign': 'center',
+          'text-halign': 'center',
+          'width': n => 28 + Math.min(n.data('callers') * 6, 40),
+          'height': n => 28 + Math.min(n.data('callers') * 6, 40),
+          'text-outline-color': '#0f1117',
+          'text-outline-width': 2,
+        }
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 1.5,
+          'line-color': '#4f46e5',
+          'target-arrow-color': '#4f46e5',
+          'target-arrow-shape': 'triangle',
+          'curve-style': 'bezier',
+          'opacity': e => e.data('confidence'),
+        }
+      },
+      {
+        selector: '.dimmed',
+        style: { opacity: 0.15 }
+      },
+      {
+        selector: '.preview-target',
+        style: { 'background-color': '#eab308', 'border-width': 0 }
+      },
+      {
+        selector: '.preview-locked',
+        style: { 'border-color': '#ef4444', 'border-width': 4 }
+      },
+      {
+        selector: '.preview-neighbor',
+        style: { 'border-color': '#3b82f6', 'border-width': 3 }
+      },
+      {
+        selector: '.preview-edge',
+        style: { 'line-color': '#3b82f6', 'target-arrow-color': '#3b82f6' }
+      },
+    ],
+    layout: { name: 'cose', animate: false, randomize: false },
+    wheelSensitivity: 0.3,
+  });
+
+  cy.on('tap', 'node', e => showSidebar(e.target.data()));
+  cy.on('tap', e => { if (e.target === cy) hideSidebar(); });
+
+  // Hover tooltip — nodes
+  cy.on('mouseover', 'node', e => showTooltip(e));
+  cy.on('mouseout', 'node', () => hideTooltip());
+  cy.on('mousemove', 'node', e => moveTooltip(e));
+
+  // Hover tooltip — edges
+  cy.on('mouseover', 'edge', e => showEdgeTooltip(e));
+  cy.on('mouseout', 'edge', () => hideTooltip());
+  cy.on('mousemove', 'edge', e => moveTooltip(e));
+
+  // Right-click context menu
+  cy.on('cxttap', 'node', e => {
+    e.originalEvent.preventDefault();
+    ctxTarget = e.target.data();
+    const menu = document.getElementById('ctx-menu');
+    menu.style.left = e.originalEvent.clientX + 'px';
+    menu.style.top = e.originalEvent.clientY + 'px';
+    menu.style.display = 'block';
+  });
+  cy.on('tap', () => { document.getElementById('ctx-menu').style.display = 'none'; });
+  document.addEventListener('click', () => { document.getElementById('ctx-menu').style.display = 'none'; });
+
+  document.getElementById('layout-select').onchange = applyLayout;
+  document.getElementById('fit-btn').onclick = () => cy.fit(undefined, 40);
+}
+
+function applyLayout() {
+  const name = document.getElementById('layout-select').value;
+  cy.layout({ name, animate: true, animationDuration: 400, randomize: false }).run();
+}
+
+function populateZoneFilter(nodes) {
+  const zones = [...new Set(nodes.map(n => n.data.zone))].sort();
+  const sel = document.getElementById('zone-filter');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All zones</option>';
+  zones.forEach(z => {
+    const o = document.createElement('option');
+    o.value = z; o.textContent = z;
+    if (z === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function updateStats(data) {
+  const locked = data.nodes.filter(n => n.data.locked).length;
+  document.getElementById('stats-bar').textContent =
+    `${data.nodes.length} functions · ${data.edges.length} edges · ${locked} locked`;
+}
+
+function showSidebar(data) {
+  document.getElementById('fn-name').textContent = data.label;
+  document.getElementById('fn-file').textContent = `${data.file}:${data.line_start}-${data.line_end}`;
+
+  const badges = document.getElementById('fn-badges');
+  badges.innerHTML = '';
+  const lb = document.createElement('span');
+  lb.className = `badge ${data.locked ? 'badge-locked' : 'badge-free'}`;
+  lb.textContent = data.locked ? 'locked' : 'free';
+  badges.appendChild(lb);
+  if (data.is_async) {
+    const ab = document.createElement('span');
+    ab.className = 'badge badge-async'; ab.textContent = 'async';
+    badges.appendChild(ab);
+  }
+
+  // Signature
+  const params = (data.params || []).join(', ');
+  const ret = data.return_type ? ` → ${data.return_type}` : '';
+  document.getElementById('fn-sig').textContent = `(${params})${ret}`;
+
+  // Docstring
+  const docCard = document.getElementById('card-doc');
+  if (data.docstring) {
+    document.getElementById('fn-doc').textContent = data.docstring;
+    docCard.style.display = '';
+  } else {
+    docCard.style.display = 'none';
+  }
+
+  document.getElementById('fn-callers').textContent = data.callers;
+  document.getElementById('fn-lines').textContent = `${data.line_start}–${data.line_end}`;
+  document.getElementById('fn-complexity').textContent = data.complexity;
+
+  // Callers list
+  const callersCard = document.getElementById('card-callers');
+  const callersList = document.getElementById('fn-callers-list');
+  const callerEdges = cy.edges(`[target="${data.id}"]`);
+  if (callerEdges.length) {
+    callersList.innerHTML = '';
+    callerEdges.forEach(e => {
+      const d = document.createElement('div');
+      d.className = 'caller-item';
+      d.textContent = e.data('source').split('::').pop();
+      d.title = e.data('source');
+      d.onclick = () => {
+        const n = cy.getElementById(e.data('source'));
+        if (n.length) { cy.animate({ fit: { eles: n, padding: 60 } }); showSidebar(n.data()); }
+      };
+      callersList.appendChild(d);
+    });
+    callersCard.style.display = '';
+  } else {
+    callersCard.style.display = 'none';
+  }
+
+  // Callees list
+  const calleesCard = document.getElementById('card-callees');
+  const calleesList = document.getElementById('fn-callees-list');
+  const calleeEdges = cy.edges(`[source="${data.id}"]`);
+  if (calleeEdges.length) {
+    calleesList.innerHTML = '';
+    calleeEdges.forEach(e => {
+      const d = document.createElement('div');
+      d.className = 'caller-item';
+      d.textContent = e.data('target').split('::').pop();
+      d.title = e.data('target');
+      d.onclick = () => {
+        const n = cy.getElementById(e.data('target'));
+        if (n.length) { cy.animate({ fit: { eles: n, padding: 60 } }); showSidebar(n.data()); }
+      };
+      calleesList.appendChild(d);
+    });
+    calleesCard.style.display = '';
+  } else {
+    calleesCard.style.display = 'none';
+  }
+
+  document.getElementById('sidebar').classList.remove('hidden');
+}
+
+function hideSidebar() {
+  document.getElementById('sidebar').classList.add('hidden');
+}
+
+// Tooltip
+function showTooltip(e) {
+  const d = e.target.data();
+  const tt = document.getElementById('tooltip');
+  const zone = d.zone || 'root';
+  const params = (d.params || []).join(', ');
+  const ret = d.return_type ? ` -> ${d.return_type}` : '';
+
+  let html = `<div class="tt-name">${d.label}</div>`;
+  html += `<div class="tt-file">${d.file}:${d.line_start}-${d.line_end}</div>`;
+  html += `<div class="tt-sig">(${params})${ret}</div>`;
+
+  if (d.docstring) {
+    html += `<div class="tt-section">Docstring</div><div class="tt-val">${d.docstring}</div>`;
+  }
+
+  html += `<div class="tt-section">Stats</div>`;
+  html += `<div class="tt-val">Zone: ${zone} · Callers: ${d.callers} · Complexity: ${d.complexity}</div>`;
+
+  // Semantic: zone intent
+  if (semanticData && semanticData.zone_intents && semanticData.zone_intents[zone]) {
+    const intent = semanticData.zone_intents[zone];
+    html += `<div class="tt-section">Zone intent</div>`;
+    html += `<div class="tt-val">${intent.why}</div>`;
+  }
+
+  // Semantic: related constraints
+  if (semanticData && semanticData.constraints) {
+    const related = semanticData.constraints.filter(c =>
+      c.affects && (c.affects.includes(zone) || c.affects.includes(d.file))
+    );
+    if (related.length) {
+      html += `<div class="tt-section">Constraints</div>`;
+      related.forEach(c => {
+        html += `<div class="tt-val" style="color:${c.severity === 'critical' ? '#fca5a5' : '#e2e8f0'}">${c.id}: ${c.name}</div>`;
+      });
+    }
+  }
+
+  tt.innerHTML = html;
+  tt.style.display = 'block';
+  moveTooltip(e);
+}
+
+function showEdgeTooltip(e) {
+  const d = e.target.data();
+  const tt = document.getElementById('tooltip');
+  const src = d.source.split('::').pop();
+  const tgt = d.target.split('::').pop();
+  const conf = Math.round(d.confidence * 100);
+  let html = `<div class="tt-name">${src} -> ${tgt}</div>`;
+  html += `<div class="tt-file">line ${d.line} · confidence ${conf}%</div>`;
+  if (d.expression) {
+    const expr = d.expression.length > 60 ? d.expression.slice(0, 60) + '...' : d.expression;
+    html += `<div class="tt-sig">${expr}</div>`;
+  }
+  tt.innerHTML = html;
+  tt.style.display = 'block';
+  moveTooltip(e);
+}
+
+function moveTooltip(e) {
+  const tt = document.getElementById('tooltip');
+  const pos = e.renderedPosition || e.target.renderedPosition();
+  const container = document.getElementById('cy').getBoundingClientRect();
+  tt.style.left = (container.left + pos.x + 15) + 'px';
+  tt.style.top = (container.top + pos.y + 15) + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+// Search
+document.getElementById('search').oninput = function() {
+  const q = this.value.toLowerCase();
+  if (!cy) return;
+  cy.nodes().forEach(n => {
+    n.style('opacity', !q || n.data('label').toLowerCase().includes(q) ? 1 : 0.1);
+  });
+};
+
+// Zone filter
+document.getElementById('zone-filter').onchange = function() {
+  loadGraph(this.value);
+};
+
+// Preview mode
+document.getElementById('preview-btn').onclick = async function() {
+  if (!cy) return;
+  if (previewMode) {
+    clearPreview();
+    this.classList.remove('active');
+    this.textContent = 'Preview';
+    return;
+  }
+  const sidebar = document.getElementById('fn-name');
+  const fnId = cy.$(':selected').first().data('id') || sidebar.textContent;
+  if (!fnId || fnId === '—') { toast('Select a function first'); return; }
+
+  const res = await fetch(`/api/preview?fn=${encodeURIComponent(fnId)}`);
+  const data = await res.json();
+  if (data.error) { toast(data.error); return; }
+
+  applyPreview(data);
+  this.classList.add('active');
+  this.textContent = 'Clear Preview';
+  previewMode = true;
+  previewTarget = fnId;
+};
+
+function applyPreview(data) {
+  cy.elements().addClass('dimmed');
+  cy.elements().removeClass('preview-target preview-locked preview-neighbor preview-edge');
+
+  const activate = ids => ids.forEach(id => {
+    cy.getElementById(id).removeClass('dimmed');
+  });
+
+  activate(data.highlight_target);
+  activate(data.highlight_locked);
+  activate(data.highlight_neighbors);
+
+  data.highlight_target.forEach(id => cy.getElementById(id).addClass('preview-target'));
+  data.highlight_locked.forEach(id => cy.getElementById(id).addClass('preview-locked'));
+  data.highlight_neighbors.forEach(id => cy.getElementById(id).addClass('preview-neighbor'));
+
+  // Edges to/from target
+  cy.edges().forEach(e => {
+    if (data.highlight_target.includes(e.data('source')) ||
+        data.highlight_target.includes(e.data('target'))) {
+      e.removeClass('dimmed').addClass('preview-edge');
+    }
+  });
+}
+
+function clearPreview() {
+  cy.elements().removeClass('dimmed preview-target preview-locked preview-neighbor preview-edge');
+  previewMode = false;
+  previewTarget = null;
+}
+
+// History
+document.getElementById('history-btn').onclick = async function() {
+  const panel = document.getElementById('history-panel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  const res = await fetch('/api/history');
+  const snaps = await res.json();
+  const list = document.getElementById('history-list');
+  if (!snaps.length) {
+    list.innerHTML = '<div style="color:#64748b;font-size:13px">No snapshots yet.<br>Run <code>winkers snapshot</code> after init.</div>';
+  } else {
+    list.innerHTML = snaps.map(s => `
+      <div class="snap-row">
+        <div class="snap-ts">${s.timestamp}</div>
+        <div class="snap-stats">
+          <span class="snap-stat">${s.functions} fns</span>
+          <span class="snap-stat">${s.call_edges} edges</span>
+        </div>
+      </div>
+    `).join('');
+  }
+  panel.style.display = 'block';
+};
+
+// WebSocket for live updates
+function connectWS() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = msg => {
+    const d = JSON.parse(msg.data);
+    if (d.type === 'graph_updated') {
+      toast('Graph updated — reloading…');
+      setTimeout(() => loadGraph(document.getElementById('zone-filter').value), 500);
+    }
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, 3000);
+}
+
+async function loadSemantic() {
+  try {
+    const res = await fetch('/api/semantic');
+    semanticData = await res.json();
+  } catch { semanticData = {}; }
+}
+
+// Context menu: View source
+document.getElementById('ctx-source').onclick = async () => {
+  if (!ctxTarget) return;
+  const res = await fetch(`/api/source?fn=${encodeURIComponent(ctxTarget.id)}`);
+  const data = await res.json();
+  if (data.error) { toast(data.error); return; }
+  document.getElementById('modal-fn-name').textContent = data.function.split('::').pop();
+  document.getElementById('modal-fn-file').textContent = `${data.file}:${data.lines}`;
+  document.getElementById('modal-source').textContent = data.source;
+  document.getElementById('source-modal').style.display = 'block';
+  document.getElementById('modal-overlay').style.display = 'block';
+};
+
+// Context menu: Preview
+document.getElementById('ctx-preview').onclick = async () => {
+  if (!ctxTarget) return;
+  const res = await fetch(`/api/preview?fn=${encodeURIComponent(ctxTarget.id)}`);
+  const data = await res.json();
+  if (!data.error) { applyPreview(data); previewMode = true; }
+};
+
+// Modal close
+document.getElementById('modal-close').onclick = () => {
+  document.getElementById('source-modal').style.display = 'none';
+  document.getElementById('modal-overlay').style.display = 'none';
+};
+document.getElementById('modal-overlay').onclick = () => {
+  document.getElementById('source-modal').style.display = 'none';
+  document.getElementById('modal-overlay').style.display = 'none';
+};
+
+// Tech Debt layer
+document.getElementById('debt-btn').onclick = async function() {
+  if (debtMode) {
+    clearDebtLayer();
+    this.classList.remove('active');
+    debtMode = false;
+    return;
+  }
+  const res = await fetch('/api/debt');
+  if (!res.ok) { toast('No debt data. Run winkers init first.'); return; }
+  debtData = await res.json();
+  applyDebtLayer(debtData);
+  this.classList.add('active');
+  debtMode = true;
+};
+
+function applyDebtLayer(data) {
+  if (!cy || !data.items) return;
+  // Build lookup: target → worst severity
+  const severity = {};
+  data.items.forEach(item => {
+    const key = item.target;
+    if (!severity[key] || item.severity === 'high') severity[key] = item.severity;
+    else if (item.severity === 'medium' && severity[key] !== 'high') severity[key] = item.severity;
+  });
+  // Build file → severity from monster_file items
+  const fileSeverity = {};
+  data.items.filter(i => i.category === 'monster_file').forEach(i => {
+    fileSeverity[i.target] = i.severity;
+  });
+
+  cy.nodes().forEach(n => {
+    const id = n.data('id');
+    const file = n.data('file');
+    const s = severity[id] || fileSeverity[file];
+    if (s === 'high') {
+      n.style({'background-color': '#dc2626', 'border-width': 4, 'border-color': '#fca5a5'});
+    } else if (s === 'medium') {
+      n.style({'background-color': '#d97706', 'border-width': 3, 'border-color': '#fde68a'});
+    } else {
+      n.style({'opacity': 0.3});
+    }
+  });
+  cy.edges().style({'opacity': 0.15});
+
+  // Update stats
+  const s = data.summary;
+  document.getElementById('stats-bar').textContent =
+    `TECH DEBT: ${s.total_issues} issues (${s.by_severity.high || 0} high, ${s.by_severity.medium || 0} medium)`;
+}
+
+function clearDebtLayer() {
+  if (!cy) return;
+  cy.nodes().removeStyle();
+  cy.edges().removeStyle();
+  if (graphData) updateStats(graphData);
+}
+
+// Init
+loadGraph();
+loadSemantic();
+connectWS();
+</script>
+</body>
+</html>
