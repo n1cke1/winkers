@@ -86,12 +86,17 @@ class _FilteredStdin(io.RawIOBase):
             # empty line — skip
 
     def read(self, size: int = -1) -> bytes:
-        """Read by accumulating non-empty lines into buffer."""
-        while len(self._buf) < (size if size > 0 else 1):
+        """Read one non-empty line and return immediately.
+
+        anyio calls read(8192) but messages are ~200 bytes.
+        We must not block waiting to fill the buffer — read one
+        line and return what we have.
+        """
+        if not self._buf:
             line = self.readline()
-            if not line:  # EOF
-                break
-            self._buf += line
+            if not line:
+                return b""
+            self._buf = line
         if size <= 0:
             out = self._buf
             self._buf = b""
