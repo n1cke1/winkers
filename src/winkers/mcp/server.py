@@ -75,51 +75,39 @@ class _FilteredStdin(io.RawIOBase):
         self._raw = raw
         self._buf = b""
 
-    def _fill(self, size: int) -> None:
-        """Read from raw and strip lone whitespace-only segments."""
-        while len(self._buf) < size:
-            chunk = self._raw.read(size)
-            if not chunk:
-                break
-            # Remove bare empty lines (\n or \r\n between JSON messages)
-            filtered = b"\n".join(
-                line for line in chunk.split(b"\n")
-                if line.strip()
-            )
-            if filtered:
-                self._buf += filtered + b"\n"
+    def readline(self, size: int = -1) -> bytes:
+        """Read one non-empty line from raw stdin."""
+        while True:
+            line = self._raw.readline(size)
+            if not line:  # EOF
+                return line
+            if line.strip():  # non-empty
+                return line
+            # empty line — skip
 
     def read(self, size: int = -1) -> bytes:
+        """Read by accumulating non-empty lines into buffer."""
+        while len(self._buf) < (size if size > 0 else 1):
+            line = self.readline()
+            if not line:  # EOF
+                break
+            self._buf += line
         if size <= 0:
-            # Read all remaining
-            rest = self._raw.read(-1)
-            if not rest and not self._buf:
-                return b""
-            data = self._buf + rest
+            out = self._buf
             self._buf = b""
-            return b"\n".join(line for line in data.split(b"\n") if line.strip()) + b"\n"
-        self._fill(size)
-        if not self._buf:
-            return b""
+            return out
         out = self._buf[:size]
         self._buf = self._buf[size:]
         return out
 
     def readinto(self, b: bytearray) -> int | None:
+        """Delegate to read() so empty lines are filtered."""
         data = self.read(len(b))
         if not data:
             return 0
         n = len(data)
         b[:n] = data
         return n
-
-    def readline(self, size: int = -1) -> bytes:
-        while True:
-            line = self._raw.readline(size)
-            if not line:
-                return line
-            if line.strip():
-                return line
 
     def readable(self) -> bool:
         return True
