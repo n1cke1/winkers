@@ -264,6 +264,7 @@ def _install_claude_code(root: Path) -> None:
     settings.setdefault("mcpServers", {})["winkers"] = {
         "command": winkers_bin,
         "args": ["serve", str(root)],
+        "type": "stdio",
     }
     claude_json.write_text(
         json.dumps(settings, indent=2), encoding="utf-8"
