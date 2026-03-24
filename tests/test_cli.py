@@ -46,15 +46,16 @@ def test_help_shows_commands():
 
 
 def test_init_autodetects_claude_code(project: Path):
-    """If .claude/ exists, init auto-registers MCP config."""
+    """If .claude/ exists, init auto-registers MCP config in user scope."""
     (project / ".claude").mkdir()
     runner = CliRunner()
     result = runner.invoke(cli, ["init", str(project)])
     assert result.exit_code == 0, result.output
-    assert (project / ".claude" / "skills" / "winkers" / "SKILL.md").exists()
-    # MCP config now goes to ~/.claude.json (user scope)
+    # MCP config goes to ~/.claude.json (user scope only)
     claude_json = Path.home() / ".claude.json"
     assert claude_json.exists()
+    # No project-level settings.json
+    assert not (project / ".claude" / "settings.json").exists()
 
 
 def test_init_autodetects_cursor(project: Path):

@@ -220,36 +220,15 @@ def _templates_dir() -> Path:
 
 
 def _install_claude_code(root: Path) -> None:
-    templates = _templates_dir() / "claude_code"
+    import shutil as _shutil
 
-    # Skill
-    skill_dst = root / ".claude" / "skills" / "winkers"
-    skill_dst.mkdir(parents=True, exist_ok=True)
-    import shutil
-    shutil.copy(templates / "skill" / "SKILL.md", skill_dst / "SKILL.md")
-    click.echo(f"  [ok] Skill installed: {skill_dst / 'SKILL.md'}")
+    # Remove old project-level MCP config if it exists
+    old_settings = root / ".claude" / "settings.json"
+    if old_settings.exists():
+        old_settings.unlink()
+        click.echo("  [ok] Removed old project-level .claude/settings.json")
 
-    # Subagent
-    agents_dst = root / ".claude" / "agents"
-    agents_dst.mkdir(parents=True, exist_ok=True)
-    shutil.copy(templates / "subagent.yaml", agents_dst / "winkers-advisor.yaml")
-    click.echo(f"  [ok] Subagent installed: {agents_dst / 'winkers-advisor.yaml'}")
-
-    # CLAUDE.md snippet
-    snippet = (templates / "claude_md_snippet.md").read_text(encoding="utf-8")
-    claude_md = root / "CLAUDE.md"
-    if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
-        if "Winkers" not in existing:
-            claude_md.write_text(existing.rstrip() + "\n\n" + snippet, encoding="utf-8")
-            click.echo(f"  [ok] Appended Winkers snippet to {claude_md}")
-        else:
-            click.echo("  ~ CLAUDE.md already mentions Winkers, skipped.")
-    else:
-        claude_md.write_text(snippet, encoding="utf-8")
-        click.echo(f"  [ok] Created {claude_md}")
-
-    # MCP settings — user scope (~/.claude.json)
+    # MCP settings — user scope only (~/.claude.json)
     claude_json = Path.home() / ".claude.json"
     settings: dict = {}
     if claude_json.exists():
@@ -258,8 +237,6 @@ def _install_claude_code(root: Path) -> None:
             settings = _json.loads(claude_json.read_text(encoding="utf-8"))
         except Exception:
             settings = {}
-    # Use full path to winkers executable so Claude Code can find it
-    import shutil as _shutil
     winkers_bin = _shutil.which("winkers") or "winkers"
     settings.setdefault("mcpServers", {})["winkers"] = {
         "command": winkers_bin,
