@@ -55,6 +55,14 @@ Right-click any function to view its source code.
 
 Python, TypeScript, JavaScript, Java, Go, Rust, C#
 
+## Tested with
+
+- Windows 11 + VS Code + Claude Code extension
+- Python 3.11 / 3.12
+- MCP SDK 1.26
+
+Linux/Mac should work but hasn't been tested in production yet. Issues welcome.
+
 ## License
 
 MIT
