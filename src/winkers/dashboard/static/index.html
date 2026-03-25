@@ -65,6 +65,9 @@
   .snap-commits { margin-top: 6px; padding-top: 6px; border-top: 1px solid #2d3148; }
   .snap-commit { font-size: 11px; color: #94a3b8; padding: 2px 0; }
   .snap-commit .sc-sha { color: #a78bfa; font-family: monospace; }
+  .snap-row { cursor: pointer; transition: border-color 0.2s; }
+  .snap-row:hover { border-color: #4f46e5; }
+  .snap-row.snap-active { border-color: #a78bfa; background: #1a1d27; }
 
   /* Context menu */
   #ctx-menu { position: fixed; background: #1e2235; border: 1px solid #4f46e5; border-radius: 8px; padding: 4px 0; z-index: 1000; display: none; min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
@@ -229,6 +232,7 @@
 
 <div id="history-panel">
   <h2>Snapshot History</h2>
+  <button id="history-back-btn" style="display:none;width:100%;margin-bottom:10px">Back to current graph</button>
   <div id="history-list"></div>
 </div>
 
@@ -675,7 +679,7 @@ document.getElementById('history-btn').onclick = async function() {
           `<div class="snap-commit"><span class="sc-sha">${c.sha}</span> ${c.message}</div>`
         ).join('')}</div>`;
       }
-      return `<div class="snap-row">
+      return `<div class="snap-row" data-file="${s.file}">
         <div class="snap-ts">${s.timestamp}</div>
         <div class="snap-stats">
           <span class="snap-stat">${s.functions} fns</span>
@@ -686,8 +690,37 @@ document.getElementById('history-btn').onclick = async function() {
         ${diffHtml}${commitsHtml}
       </div>`;
     }).join('');
+    // Click handler for each snapshot row
+    list.querySelectorAll('.snap-row').forEach(row => {
+      row.onclick = () => loadSnapshotGraph(row.dataset.file);
+    });
   }
   panel.style.display = 'block';
+};
+
+// Load historical snapshot graph
+let viewingSnapshot = false;
+
+async function loadSnapshotGraph(file) {
+  const res = await fetch(`/api/snapshot-graph?file=${encodeURIComponent(file)}`);
+  if (!res.ok) { toast('Could not load snapshot'); return; }
+  const data = await res.json();
+  buildZoneColors(data.nodes);
+  renderGraph(data);
+  viewingSnapshot = true;
+  document.getElementById('history-back-btn').style.display = 'block';
+  document.getElementById('stats-bar').textContent = 'VIEWING SNAPSHOT: ' + file.replace('.json', '');
+  // Highlight active row
+  document.querySelectorAll('.snap-row').forEach(r => r.classList.remove('snap-active'));
+  const active = document.querySelector(`.snap-row[data-file="${file}"]`);
+  if (active) active.classList.add('snap-active');
+}
+
+document.getElementById('history-back-btn').onclick = function() {
+  loadGraph(document.getElementById('zone-filter').value);
+  viewingSnapshot = false;
+  this.style.display = 'none';
+  document.querySelectorAll('.snap-row').forEach(r => r.classList.remove('snap-active'));
 };
 
 function fmtDelta(label, n) {

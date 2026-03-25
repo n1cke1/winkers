@@ -388,12 +388,33 @@ def create_app(root: Path) -> web.Application:
 
         return web.json_response(result)
 
+    async def handle_snapshot_graph(request: web.Request) -> web.Response:
+        """Load a historical snapshot as Cytoscape graph."""
+        filename = request.rel_url.query.get("file", "")
+        if not filename:
+            return web.json_response({"error": "file parameter required"}, status=400)
+
+        history_dir = root / ".winkers" / "history"
+        snap_path = history_dir / filename
+        if not snap_path.exists() or ".." in filename:
+            return web.json_response({"error": "Snapshot not found"}, status=404)
+
+        try:
+            from winkers.models import Graph
+            data = json.loads(snap_path.read_text(encoding="utf-8"))
+            snap_graph = Graph.model_validate(data)
+            zone = request.rel_url.query.get("zone")
+            return web.json_response(_graph_to_cytoscape(snap_graph, zone))
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/graph", handle_graph)
     app.router.add_get("/api/preview", handle_preview)
     app.router.add_get("/api/semantic", handle_semantic)
     app.router.add_get("/api/history", handle_history)
+    app.router.add_get("/api/snapshot-graph", handle_snapshot_graph)
     app.router.add_get("/api/debt", handle_debt)
     app.router.add_get("/api/source", handle_source)
     app.router.add_get("/api/sessions", handle_sessions)
