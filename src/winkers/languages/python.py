@@ -35,6 +35,16 @@ class PythonProfile(LanguageProfile):
     ]
     """
 
+    decorator_query = """
+    (decorated_definition
+      (decorator
+        (call
+          function: (_) @dec.name
+          arguments: (argument_list (_) @dec.arg))) @dec.def
+      definition: (function_definition
+        name: (identifier) @dec.fn_name))
+    """
+
     class_query = """
     (class_definition
       name: (identifier) @class.name

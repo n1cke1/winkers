@@ -20,6 +20,7 @@ class LanguageProfile(ABC):
     import_query: str
     export_query: str | None = None
     class_query: str | None = None
+    decorator_query: str | None = None
 
     def resolve_import(self, import_node: dict, project_files: list[str]) -> str | None:
         """Resolve an import to an absolute file path. Override per language."""

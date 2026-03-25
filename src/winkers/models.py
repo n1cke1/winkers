@@ -31,6 +31,8 @@ class FunctionNode(BaseModel):
     docstring: str | None = None
     complexity: int = 0
     lines: int = 0
+    route: str | None = None          # "/api/products"
+    http_method: str | None = None    # "GET", "POST", etc.
 
 
 class FileNode(BaseModel):

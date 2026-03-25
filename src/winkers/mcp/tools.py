@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from winkers.models import Graph
+from winkers.models import FileNode, Graph
 
 
 def register_tools(
@@ -168,6 +168,35 @@ def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "imports_from": _zone_imports_from(z, zones, graph),
             "imported_by": _zone_imported_by(z, zones, graph),
         }
+        # Routes for this zone
+        routes = []
+        helpers = []
+        for f in files:
+            for fn_id in graph.files.get(f, FileNode(
+                path=f, language="", imports=[], function_ids=[],
+            )).function_ids:
+                fn = graph.functions.get(fn_id)
+                if fn is None:
+                    continue
+                if fn.route:
+                    callees = [
+                        e.target_fn.split("::")[-1]
+                        for e in graph.callees(fn_id)
+                    ]
+                    routes.append({
+                        "method": fn.http_method or "GET",
+                        "path": fn.route,
+                        "handler": fn.name,
+                        "calls": callees[:5],
+                    })
+                else:
+                    helpers.append(fn.name)
+
+        if routes:
+            entry["routes"] = routes
+            if helpers:
+                entry["helpers"] = helpers
+
         if semantic and z in semantic.zone_intents:
             intent = semantic.zone_intents[z]
             entry["intent"] = {

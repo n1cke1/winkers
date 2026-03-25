@@ -135,6 +135,7 @@ class GraphBuilder:
 
         imports = self._extract_imports(parse_result)
         fn_ids = self._extract_functions(parse_result, rel, graph)
+        self._extract_routes(parse_result, rel, graph)
 
         # Skip files with no functions and no imports (likely unparseable)
         if not fn_ids and not imports:
@@ -240,6 +241,61 @@ class GraphBuilder:
                 continue
             params.append(Param(name=name, type_hint=type_hint, default=default))
         return params
+
+    def _extract_routes(
+        self, parse_result: ParseResult, rel: str, graph: Graph,
+    ) -> None:
+        """Find route decorators and annotate FunctionNodes."""
+        profile = parse_result.profile
+        if not profile.decorator_query:
+            return
+
+        # Route patterns: @app.route, @app.get, @router.post, @bp.put, etc.
+        METHODS_MAP = {
+            "route": "GET", "get": "GET", "post": "POST",
+            "put": "PUT", "delete": "DELETE", "patch": "PATCH",
+        }
+
+        matches = self._parser.query_matches(parse_result, profile.decorator_query)
+
+        for _pattern_idx, capture_dict in matches:
+            dec_name_nodes = capture_dict.get("dec.name", [])
+            dec_arg_nodes = capture_dict.get("dec.arg", [])
+            fn_name_nodes = capture_dict.get("dec.fn_name", [])
+
+            if not dec_name_nodes or not dec_arg_nodes or not fn_name_nodes:
+                continue
+
+            dec_text = parse_result.text(dec_name_nodes[0])
+            arg_text = parse_result.text(dec_arg_nodes[0]).strip("\"'")
+            fn_name = parse_result.text(fn_name_nodes[0])
+            fn_id = f"{rel}::{fn_name}"
+
+            fn = graph.functions.get(fn_id)
+            if fn is None:
+                continue
+
+            # Match decorator name: app.route, app.get, bp.post, etc.
+            parts = dec_text.rsplit(".", 1)
+            method_name = parts[-1].lower() if parts else ""
+
+            if method_name not in METHODS_MAP:
+                continue
+
+            http_method = METHODS_MAP[method_name]
+            # For @app.route, check methods= kwarg
+            if method_name == "route":
+                for node in dec_arg_nodes:
+                    text = parse_result.text(node)
+                    if "POST" in text.upper():
+                        http_method = "POST"
+                    elif "PUT" in text.upper():
+                        http_method = "PUT"
+                    elif "DELETE" in text.upper():
+                        http_method = "DELETE"
+
+            fn.route = arg_text
+            fn.http_method = http_method
 
     def _extract_docstring(self, fn_node, parse_result: ParseResult) -> str | None:
         for child in fn_node.children:
