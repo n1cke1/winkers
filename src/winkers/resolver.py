@@ -37,17 +37,13 @@ class CrossFileResolver:
 
             captures = self._parser.query(parse_result, profile.call_query)
 
-            # Group captures by call: {node_id: {capture_name: node}}
-            call_groups = self._group_call_captures(captures)
+            imported_modules = {
+                i["text"] for i in file_node.imports
+                if i.get("capture") == "imp.module"
+            }
 
-            for group in call_groups:
-                attr_node = group.get("call.attr")
-                name_node = group.get("call.name")
-                obj_node = group.get("call.object")
-
-                node = attr_node or name_node
-                capture_name = "call.attr" if attr_node else "call.name"
-                if node is None:
+            for node, capture_name in captures:
+                if capture_name not in ("call.name", "call.attr"):
                     continue
 
                 # Only consider calls inside this function's line range
@@ -60,14 +56,14 @@ class CrossFileResolver:
                 # For attribute calls (obj.method), only resolve if obj
                 # matches a known module import. Prevents dict.get(),
                 # list.append() etc. from creating false edges.
-                if capture_name == "call.attr" and obj_node is not None:
-                    obj_text = parse_result.text(obj_node)
-                    imported_modules = {
-                        i["text"] for i in file_node.imports
-                        if i.get("capture") == "imp.module"
-                    }
-                    if obj_text not in imported_modules:
-                        continue
+                if capture_name == "call.attr":
+                    attr_parent = node.parent
+                    if attr_parent and attr_parent.type == "attribute":
+                        obj_node = attr_parent.child_by_field_name("object")
+                        if obj_node:
+                            obj_text = parse_result.text(obj_node)
+                            if obj_text not in imported_modules:
+                                continue
 
                 expression = self._get_call_expression(node, parse_result)
 
@@ -94,20 +90,6 @@ class CrossFileResolver:
         self._upgrade_confidence_via_imports(graph)
 
         graph.meta["total_call_edges"] = len(graph.call_edges)
-
-    def _group_call_captures(
-        self, captures: list[tuple],
-    ) -> list[dict[str, object]]:
-        """Group captures by their parent call node."""
-        groups: dict[int, dict[str, object]] = {}
-        for node, capture_name in captures:
-            # Find parent call node to group related captures
-            parent = node.parent
-            while parent and parent.type != "call":
-                parent = parent.parent
-            key = id(parent) if parent else id(node)
-            groups.setdefault(key, {})[capture_name] = node
-        return list(groups.values())
 
     def _get_call_expression(self, node, parse_result) -> str:
         """Walk up to the call node to get the full expression text."""
