@@ -894,17 +894,24 @@ function applyCommitOverlay(session) {
   if (!cy) return;
   clearDebtLayer();
 
-  const modified = new Set((session.files_modified || []).map(normPath));
-  const created = new Set((session.files_created || []).map(normPath));
+  const modifiedFiles = new Set((session.files_modified || []).map(normPath));
+  const createdFiles = new Set((session.files_created || []).map(normPath));
+  const modifiedFns = new Set(session.commit?.modified_functions || []);
 
   cy.nodes().forEach(n => {
+    const fnId = n.data('id');
     const file = normPath(n.data('file') || '');
-    if (created.has(file)) {
+    if (createdFiles.has(file)) {
+      // New file: bright green
       n.style({'background-color': '#22c55e', 'border-width': 4, 'border-color': '#86efac', 'width': 42, 'height': 42});
-    } else if (modified.has(file)) {
+    } else if (modifiedFns.has(fnId)) {
+      // Function lines changed: yellow
       n.style({'background-color': '#eab308', 'border-width': 3, 'border-color': '#fde68a'});
+    } else if (modifiedFiles.has(file)) {
+      // File changed but not this function: dim orange
+      n.style({'background-color': '#b45309', 'border-width': 1, 'border-color': '#92400e', 'opacity': 0.5});
     } else {
-      n.style({'opacity': 0.2});
+      n.style({'opacity': 0.15});
     }
   });
   cy.edges().style({'opacity': 0.1});
@@ -912,11 +919,11 @@ function applyCommitOverlay(session) {
   // Show commit panel
   const panel = document.getElementById('commit-panel');
   panel.classList.add('visible');
-  const hash = session.commit?.hash ? session.commit.hash.slice(0,7) : '—';
+  const hash = session.commit?.hash ? session.commit.hash.slice(0,7) : '---';
   const msg = session.commit?.message || 'uncommitted';
   const ins = session.commit?.insertions || 0;
   const del = session.commit?.deletions || 0;
-  const nMod = (session.files_modified || []).length;
+  const nFns = modifiedFns.size;
   const nNew = (session.files_created || []).length;
   const cd = session.debt?.complexity_delta || 0;
   const ie = session.debt?.import_edges_delta || 0;
@@ -924,8 +931,8 @@ function applyCommitOverlay(session) {
   const lbl = session.score_label || '';
   const sClass = 'score-' + lbl;
   document.getElementById('commit-summary').innerHTML =
-    `<span class="cs-hash">${hash}</span> — <span class="cs-msg">${msg}</span><br>` +
-    `+${ins} -${del} lines | ${nMod} modified, ${nNew} created<br>` +
+    `<span class="cs-hash">${hash}</span> --- <span class="cs-msg">${msg}</span><br>` +
+    `+${ins} -${del} lines | ${nFns} functions changed, ${nNew} files created<br>` +
     `Debt: complexity ${cd >= 0 ? '+' : ''}${cd} | coupling ${ie >= 0 ? '+' : ''}${ie}<br>` +
     `Score: <span class="cs-score ${sClass}">${sc} (${lbl})</span>`;
 }

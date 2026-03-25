@@ -21,6 +21,10 @@ def score_session(
 ) -> ScoredSession:
     """Full scoring pipeline: commit binding + debt delta + score."""
     commit = bind_to_commit(session, project_path)
+    if commit.hash and graph_after:
+        commit.modified_functions = _find_modified_functions(
+            project_path, commit.hash, graph_after,
+        )
     debt = compute_debt_delta(session, graph_before, graph_after)
     sc = estimate_score(session, commit, debt)
     return ScoredSession(
@@ -117,6 +121,56 @@ def _is_reverted(project_path: Path, commit_hash: str) -> bool:
         return bool(result.stdout.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+def _find_modified_functions(
+    project_path: Path, commit_hash: str, graph: Graph,
+) -> list[str]:
+    """Find function IDs whose line ranges overlap with changed lines."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--unified=0", f"{commit_hash}~1", commit_hash],
+            cwd=str(project_path), capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    # Parse unified diff to get changed lines per file
+    changed: dict[str, set[int]] = {}
+    current_file = ""
+    for line in result.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            current_file = line[6:]
+        elif line.startswith("@@ ") and current_file:
+            # @@ -old,count +new,count @@
+            parts = line.split(" ")
+            for part in parts:
+                if part.startswith("+") and "," in part:
+                    start, count = part[1:].split(",", 1)
+                    try:
+                        s, c = int(start), int(count)
+                        lines = set(range(s, s + c))
+                        changed.setdefault(current_file, set()).update(lines)
+                    except ValueError:
+                        pass
+                elif part.startswith("+") and part[1:].isdigit():
+                    s = int(part[1:])
+                    changed.setdefault(current_file, set()).add(s)
+
+    # Cross-reference with graph functions
+    modified_fns: list[str] = []
+    for fn in graph.functions.values():
+        file_norm = fn.file.replace("\\", "/")
+        if file_norm not in changed:
+            continue
+        fn_lines = set(range(fn.line_start, fn.line_end + 1))
+        if fn_lines & changed[file_norm]:
+            modified_fns.append(fn.id)
+
+    return modified_fns
 
 
 # ---------------------------------------------------------------------------

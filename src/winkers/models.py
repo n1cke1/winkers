@@ -130,6 +130,7 @@ class CommitBinding(BaseModel):
     files_changed: list[str] = []
     insertions: int = 0
     deletions: int = 0
+    modified_functions: list[str] = []  # fn_ids with changed lines
 
 
 class DebtDelta(BaseModel):
