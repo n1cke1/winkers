@@ -135,6 +135,7 @@ class GraphBuilder:
 
         imports = self._extract_imports(parse_result)
         fn_ids = self._extract_functions(parse_result, rel, graph)
+        self._extract_routes(parse_result, rel, graph)
 
         # Skip files with no functions and no imports (likely unparseable)
         if not fn_ids and not imports:
@@ -240,6 +241,78 @@ class GraphBuilder:
                 continue
             params.append(Param(name=name, type_hint=type_hint, default=default))
         return params
+
+    def _extract_routes(
+        self, parse_result: ParseResult, rel: str, graph: Graph,
+    ) -> None:
+        """Find route decorators and annotate FunctionNodes."""
+        profile = parse_result.profile
+        if not profile.decorator_query:
+            return
+
+        # Route patterns: @app.route, @app.get, @router.post, @bp.put, etc.
+        METHODS_MAP = {
+            "route": "GET", "get": "GET", "post": "POST",
+            "put": "PUT", "delete": "DELETE", "patch": "PATCH",
+        }
+
+        matches = self._parser.query_matches(parse_result, profile.decorator_query)
+
+        # Collect all decorator args per function (query returns
+        # separate matches for each argument in argument_list)
+        fn_dec: dict[str, dict] = {}
+        for _pattern_idx, capture_dict in matches:
+            dec_name_nodes = capture_dict.get("dec.name", [])
+            fn_name_nodes = capture_dict.get("dec.fn_name", [])
+            dec_arg_nodes = capture_dict.get("dec.arg", [])
+
+            if not dec_name_nodes or not fn_name_nodes:
+                continue
+
+            fn_name = parse_result.text(fn_name_nodes[0])
+            if fn_name not in fn_dec:
+                fn_dec[fn_name] = {
+                    "dec_text": parse_result.text(dec_name_nodes[0]),
+                    "args": [],
+                }
+            for node in dec_arg_nodes:
+                fn_dec[fn_name]["args"].append(parse_result.text(node))
+
+        for fn_name, info in fn_dec.items():
+            fn_id = f"{rel}::{fn_name}"
+            fn = graph.functions.get(fn_id)
+            if fn is None:
+                continue
+
+            parts = info["dec_text"].rsplit(".", 1)
+            method_name = parts[-1].lower() if parts else ""
+            if method_name not in METHODS_MAP:
+                continue
+
+            # Find path: first arg starting with /
+            route_path = ""
+            for arg in info["args"]:
+                raw = arg.strip("\"'")
+                if raw.startswith("/"):
+                    route_path = raw
+                    break
+            if not route_path:
+                continue
+
+            http_method = METHODS_MAP[method_name]
+            if method_name == "route":
+                for arg in info["args"]:
+                    upper = arg.upper()
+                    if "METHODS" in upper:
+                        if "POST" in upper:
+                            http_method = "POST"
+                        elif "PUT" in upper:
+                            http_method = "PUT"
+                        elif "DELETE" in upper:
+                            http_method = "DELETE"
+
+            fn.route = route_path
+            fn.http_method = http_method
 
     def _extract_docstring(self, fn_node, parse_result: ParseResult) -> str | None:
         for child in fn_node.children:

@@ -211,3 +211,163 @@ async def test_no_graph_returns_404(tmp_path):
     async with TestClient(TestServer(app)) as c:
         resp = await c.get("/api/graph")
         assert resp.status == 404
+
+
+# ---------------------------------------------------------------------------
+# Sessions & Insights endpoints
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_sessions_empty(client):
+    resp = await client.get("/api/sessions")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == []
+
+
+@pytest.mark.asyncio
+async def test_get_sessions_with_data(graph_project):
+    """Sessions endpoint returns recorded sessions."""
+    from winkers.models import ScoredSession, SessionRecord
+    from winkers.session_store import SessionStore
+
+    store = SessionStore(graph_project)
+    session = SessionRecord(
+        session_id="dash-s1",
+        started_at="2026-03-25T10:00:00Z",
+        completed_at="2026-03-25T10:30:00Z",
+        task_prompt="Add payment feature",
+        task_hash="abc123",
+        total_turns=8,
+        exploration_turns=4,
+        modification_turns=3,
+        verification_turns=1,
+    )
+    store.save(ScoredSession(session=session, score=0.82))
+
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/sessions")
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data) == 1
+        assert data[0]["session_id"] == "dash-s1"
+        assert data[0]["score"] == pytest.approx(0.82)
+        assert data[0]["score_label"] == "good"
+        assert data[0]["total_turns"] == 8
+
+
+@pytest.mark.asyncio
+async def test_get_insights_empty(client):
+    resp = await client.get("/api/insights")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == []
+
+
+@pytest.mark.asyncio
+async def test_get_insights_with_data(graph_project):
+    """Insights endpoint returns open insights."""
+    from winkers.analyzer import AnalysisResult, Insight
+    from winkers.insights_store import InsightsStore
+
+    store = InsightsStore(graph_project)
+    store.merge(AnalysisResult(
+        session_id="s1",
+        insights=[
+            Insight(
+                category="CONSTRAINT",
+                description="tax per line item",
+                semantic_target="constraints",
+                injection_content="Tax must be per line item.",
+                priority="high",
+                turns_wasted=4,
+                tokens_wasted=6000,
+                session_id="s1",
+            ),
+        ],
+    ))
+
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/insights")
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data) == 1
+        assert data[0]["category"] == "CONSTRAINT"
+        assert data[0]["priority"] == "high"
+        assert data[0]["turns_wasted"] == 4
+
+
+@pytest.mark.asyncio
+async def test_index_has_learning_tab(client):
+    resp = await client.get("/")
+    text = await resp.text()
+    assert "Agent Learning" in text
+    assert "session-select" in text
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_no_sessions(client):
+    """Without recorded sessions, returns only estimated entries."""
+    resp = await client.get("/api/tool-stats")
+    assert resp.status == 200
+    data = await resp.json()
+    # Graph exists so we get estimates, but no recorded entries
+    assert all(d["source"] == "estimated" for d in data)
+    assert all(d["calls"] == 0 for d in data)
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_with_data(graph_project):
+    """Tool stats aggregates token usage across sessions."""
+    from winkers.models import ScoredSession, SessionRecord, ToolCall
+    from winkers.session_store import SessionStore
+
+    store = SessionStore(graph_project)
+    session = SessionRecord(
+        session_id="ts-s1",
+        started_at="2026-03-25T10:00:00Z",
+        completed_at="2026-03-25T10:30:00Z",
+        task_hash="abc",
+        tool_calls=[
+            ToolCall(name="Read", tokens_in=500, tokens_out=20),
+            ToolCall(name="Read", tokens_in=600, tokens_out=25),
+            ToolCall(name="Edit", tokens_in=800, tokens_out=50),
+            ToolCall(name="mcp__winkers__map", tokens_in=300, tokens_out=200),
+        ],
+    )
+    store.save(ScoredSession(session=session))
+
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/tool-stats")
+        assert resp.status == 200
+        data = await resp.json()
+
+        by_name = {d["name"]: d for d in data}
+        assert by_name["Read"]["calls"] == 2
+        assert by_name["Read"]["tokens_in"] == 1100
+        assert by_name["Read"]["source"] == "recorded"
+        assert by_name["Edit"]["calls"] == 1
+        assert by_name["mcp__winkers__map"]["calls"] == 1
+        # Recorded map tool should have estimated_out from graph
+        assert "estimated_out" in by_name["mcp__winkers__map"]
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_estimated_only(graph_project):
+    """Without sessions, tool stats returns estimates from graph."""
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/tool-stats")
+        assert resp.status == 200
+        data = await resp.json()
+        # Should have estimated entries from graph
+        assert len(data) > 0
+        assert all(d["source"] == "estimated" for d in data)
+        names = {d["name"] for d in data}
+        assert "mcp__winkers__map" in names
+        assert "mcp__winkers__scope" in names
+        for d in data:
+            assert d["estimated_out"] > 0

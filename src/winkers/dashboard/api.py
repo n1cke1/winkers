@@ -93,25 +93,120 @@ def _preview(graph, fn_id: str) -> dict[str, Any]:
 
 
 def _history(root: Path) -> list[dict]:
-    """Return list of snapshots from .winkers/history/."""
+    """Return snapshots with diffs and git commits between them."""
     history_dir = root / ".winkers" / "history"
     if not history_dir.exists():
         return []
-    snapshots = []
-    for path in sorted(history_dir.glob("*.json"), reverse=True):
+
+    # Load all snapshots chronologically
+    paths = sorted(history_dir.glob("*.json"))
+    snapshots: list[dict] = []
+    prev_data: dict | None = None
+
+    for path in paths:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            fns = len(data.get("functions", {}))
-            edges = len(data.get("call_edges", []))
-            snapshots.append({
-                "file": path.name,
-                "timestamp": path.stem.replace("T", " ").replace("-", ":", 2),
-                "functions": fns,
-                "call_edges": edges,
-            })
         except Exception:
-            pass
+            continue
+
+        fns = data.get("functions", {})
+        edges = data.get("call_edges", [])
+        files = data.get("files", {})
+        fn_count = len(fns)
+        edge_count = len(edges)
+        file_count = len(files)
+        total_complexity = sum(
+            f.get("complexity", 0) for f in fns.values()
+        )
+
+        entry: dict[str, Any] = {
+            "file": path.name,
+            "timestamp": path.stem.replace("T", " ").replace("-", ":", 2),
+            "functions": fn_count,
+            "call_edges": edge_count,
+            "files": file_count,
+            "complexity": total_complexity,
+        }
+
+        # Diff with previous snapshot
+        if prev_data is not None:
+            prev_fns = prev_data.get("functions", {})
+            prev_edges = prev_data.get("call_edges", [])
+            prev_files = prev_data.get("files", {})
+            prev_cx = sum(
+                f.get("complexity", 0) for f in prev_fns.values()
+            )
+
+            added_fns = [f for f in fns if f not in prev_fns]
+            removed_fns = [f for f in prev_fns if f not in fns]
+            added_files = [f for f in files if f not in prev_files]
+            removed_files = [f for f in prev_files if f not in files]
+
+            entry["diff"] = {
+                "functions_delta": fn_count - len(prev_fns),
+                "edges_delta": edge_count - len(prev_edges),
+                "files_delta": file_count - len(prev_files),
+                "complexity_delta": total_complexity - prev_cx,
+                "added_functions": added_fns[:10],
+                "removed_functions": removed_fns[:10],
+                "added_files": added_files,
+                "removed_files": removed_files,
+            }
+
+        prev_data = data
+        snapshots.append(entry)
+
+    # Add git commits between snapshots
+    _enrich_with_git_commits(root, snapshots)
+
+    # Return newest first
+    snapshots.reverse()
     return snapshots
+
+
+def _enrich_with_git_commits(root: Path, snapshots: list[dict]) -> None:
+    """Add git commits between consecutive snapshots."""
+    import subprocess
+    import sys
+
+    try:
+        kwargs: dict[str, Any] = {
+            "capture_output": True, "text": True,
+            "cwd": str(root), "timeout": 10,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(
+            ["git", "log", "-50", "--pretty=format:%H|%ad|%s",
+             "--date=iso-strict"],
+            **kwargs,
+        )
+    except Exception:
+        return
+
+    if result.returncode != 0:
+        return
+
+    commits = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            commits.append({
+                "sha": parts[0][:8],
+                "date": parts[1],
+                "message": parts[2],
+            })
+
+    for i, snap in enumerate(snapshots):
+        ts = snap["timestamp"].replace(" ", "T").replace(":", "-", 2)
+        next_ts = snapshots[i + 1]["timestamp"].replace(
+            " ", "T"
+        ).replace(":", "-", 2) if i + 1 < len(snapshots) else "9999"
+
+        snap["commits"] = [
+            c for c in commits
+            if ts <= c["date"].replace(":", "-", 2) < next_ts
+        ][:10]
 
 
 def create_app(root: Path) -> web.Application:
@@ -195,16 +290,231 @@ def create_app(root: Path) -> web.Application:
             ws_clients.discard(ws)
         return ws
 
+    async def handle_sessions(request: web.Request) -> web.Response:
+        from winkers.scoring import score_label
+        from winkers.session_store import SessionStore
+
+        sessions = SessionStore(root).load_all()
+        result = []
+        for s in sessions:
+            result.append({
+                "session_id": s.session.session_id,
+                "task_prompt": s.session.task_prompt,
+                "started_at": s.session.started_at,
+                "model": s.session.model,
+                "total_turns": s.session.total_turns,
+                "exploration_turns": s.session.exploration_turns,
+                "modification_turns": s.session.modification_turns,
+                "verification_turns": s.session.verification_turns,
+                "files_modified": s.session.files_modified,
+                "files_created": s.session.files_created,
+                "tests_passed": s.session.tests_passed,
+                "session_end": s.session.session_end,
+                "score": s.score,
+                "score_label": score_label(s.score),
+                "commit": s.commit.model_dump(),
+                "debt": s.debt.model_dump(),
+            })
+        return web.json_response(result)
+
+    async def handle_insights(request: web.Request) -> web.Response:
+        from winkers.insights_store import InsightsStore
+
+        store = InsightsStore(root)
+        items = store.open_insights()
+        result = []
+        for item in items:
+            result.append({
+                "category": item.category,
+                "description": item.description,
+                "turns_wasted": item.turns_wasted,
+                "tokens_wasted": item.tokens_wasted,
+                "semantic_target": item.semantic_target,
+                "injection_content": item.injection_content,
+                "priority": item.priority,
+                "occurrences": item.occurrences,
+                "session_ids": item.session_ids,
+            })
+        return web.json_response(result)
+
+    async def handle_tool_stats(request: web.Request) -> web.Response:
+        from winkers.session_store import SessionStore
+
+        sessions = SessionStore(root).load_all()
+        stats: dict[str, dict] = {}
+        for s in sessions:
+            for tc in s.session.tool_calls:
+                name = tc.name
+                if name not in stats:
+                    stats[name] = {
+                        "calls": 0,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                    }
+                stats[name]["calls"] += 1
+                stats[name]["tokens_in"] += tc.tokens_in
+                stats[name]["tokens_out"] += tc.tokens_out
+
+        result = []
+        for name, st in sorted(
+            stats.items(),
+            key=lambda x: x[1]["tokens_in"] + x[1]["tokens_out"],
+            reverse=True,
+        ):
+            total = st["tokens_in"] + st["tokens_out"]
+            avg = total // st["calls"] if st["calls"] else 0
+            result.append({
+                "name": name,
+                "calls": st["calls"],
+                "tokens_in": st["tokens_in"],
+                "tokens_out": st["tokens_out"],
+                "tokens_total": total,
+                "tokens_avg": avg,
+                "source": "recorded",
+            })
+
+        # Add estimated stats for Winkers MCP tools from graph
+        estimates = _estimate_mcp_tokens(store.load(), root)
+        recorded_names = {r["name"] for r in result}
+        for est in estimates:
+            if est["name"] not in recorded_names:
+                result.append(est)
+            else:
+                # Enrich recorded entry with estimate
+                for r in result:
+                    if r["name"] == est["name"]:
+                        r["estimated_out"] = est["estimated_out"]
+                        break
+
+        return web.json_response(result)
+
+    async def handle_snapshot_graph(request: web.Request) -> web.Response:
+        """Load a historical snapshot as Cytoscape graph."""
+        filename = request.rel_url.query.get("file", "")
+        if not filename:
+            return web.json_response({"error": "file parameter required"}, status=400)
+
+        history_dir = root / ".winkers" / "history"
+        snap_path = history_dir / filename
+        if not snap_path.exists() or ".." in filename:
+            return web.json_response({"error": "Snapshot not found"}, status=404)
+
+        try:
+            from winkers.models import Graph
+            data = json.loads(snap_path.read_text(encoding="utf-8"))
+            snap_graph = Graph.model_validate(data)
+            zone = request.rel_url.query.get("zone")
+            return web.json_response(_graph_to_cytoscape(snap_graph, zone))
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/graph", handle_graph)
     app.router.add_get("/api/preview", handle_preview)
     app.router.add_get("/api/semantic", handle_semantic)
     app.router.add_get("/api/history", handle_history)
+    app.router.add_get("/api/snapshot-graph", handle_snapshot_graph)
     app.router.add_get("/api/debt", handle_debt)
     app.router.add_get("/api/source", handle_source)
+    app.router.add_get("/api/sessions", handle_sessions)
+    app.router.add_get("/api/insights", handle_insights)
+    app.router.add_get("/api/tool-stats", handle_tool_stats)
     app.router.add_get("/ws", handle_ws)
     return app
+
+
+def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
+    """Estimate output tokens for each Winkers MCP tool from the current graph."""
+    if graph is None:
+        return []
+
+    from winkers.mcp.tools import (
+        _tool_functions_graph,
+        _tool_hotspots,
+        _tool_map,
+        _tool_scope,
+    )
+
+    estimates = []
+
+    def _chars_to_tokens(text: str) -> int:
+        return len(text) // 4  # ~4 chars per token
+
+    # map()
+    try:
+        result = _tool_map(graph, {}, root)
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__map",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # functions_graph()
+    try:
+        result = _tool_functions_graph(graph)
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__functions_graph",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # hotspots()
+    try:
+        result = _tool_hotspots(graph, {})
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__hotspots",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # scope() — estimate for average function
+    try:
+        fn_ids = list(graph.functions.keys())
+        if fn_ids:
+            # Pick a median-complexity function
+            by_callers = sorted(fn_ids, key=lambda f: len(graph.callers(f)))
+            mid = by_callers[len(by_callers) // 2]
+            result = _tool_scope(graph, {"function": mid}, root)
+            tokens = _chars_to_tokens(json.dumps(result))
+            estimates.append({
+                "name": "mcp__winkers__scope",
+                "calls": 0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "tokens_total": 0,
+                "tokens_avg": 0,
+                "estimated_out": tokens,
+                "source": "estimated",
+            })
+    except Exception:
+        pass
+
+    return estimates
 
 
 def run(root: Path, host: str = "127.0.0.1", port: int = 7420) -> None:

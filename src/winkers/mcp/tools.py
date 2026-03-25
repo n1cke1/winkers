@@ -29,6 +29,7 @@ def register_tools(
                     " and before_writing_code checklist that you MUST follow."
                     " Ignoring these causes architectural damage."
                     " Also returns: zones with intents, hotspots."
+                    " Use routes() tool for HTTP endpoints."
                     " Use zone/file filters to narrow down."
                 ),
                 inputSchema={
@@ -56,19 +57,20 @@ def register_tools(
             Tool(
                 name="hotspots",
                 description=(
-                    "Critical dependency graph: functions with 10+ callers and"
-                    " WHO calls them. These are high-impact functions —"
+                    "Critical dependency graph: functions with many callers and"
+                    " WHO calls them. These are high-impact functions --"
                     " changing their signature or behavior affects many callers."
                     " ALWAYS check this before modifying a frequently-called function."
                     " Each entry shows the function, its callers list, and the"
                     " call expressions so you understand HOW it's being used."
+                    " Try min_callers=5 for small projects, 10 for large ones."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "min_callers": {
                             "type": "integer",
-                            "description": "Minimum callers threshold (default: 10)",
+                            "description": "Minimum callers (default 10, use 5 for small projects)",
                         },
                     },
                 },
@@ -84,6 +86,28 @@ def register_tools(
                     "properties": {
                         "function": {"type": "string", "description": "Function ID or name"},
                         "file": {"type": "string", "description": "File path"},
+                    },
+                },
+            ),
+            Tool(
+                name="routes",
+                description=(
+                    "HTTP routes (Flask, FastAPI, etc.): method, path,"
+                    " handler function, and what each handler calls."
+                    " Use to find analogous endpoints before adding new ones."
+                    " Filter by path pattern or zone."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "filter": {
+                            "type": "string",
+                            "description": "Filter routes by path substring (e.g. 'carbon')",
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Filter routes by zone name",
+                        },
                     },
                 },
             ),
@@ -110,6 +134,8 @@ def register_tools(
             result = _tool_hotspots(graph, arguments)
         elif name == "scope":
             result = _tool_scope(graph, arguments, root)
+        elif name == "routes":
+            result = _tool_routes(graph, arguments)
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -168,6 +194,15 @@ def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "imports_from": _zone_imports_from(z, zones, graph),
             "imported_by": _zone_imported_by(z, zones, graph),
         }
+        # Count routes in this zone (details via routes() tool)
+        route_count = sum(
+            1 for f in files
+            for fn_id in (graph.files[f].function_ids if f in graph.files else [])
+            if graph.functions.get(fn_id) and graph.functions[fn_id].route
+        )
+        if route_count:
+            entry["routes_count"] = route_count
+
         if semantic and z in semantic.zone_intents:
             intent = semantic.zone_intents[z]
             entry["intent"] = {
@@ -351,6 +386,45 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
 
     return {"error": "Provide 'function' or 'file' argument"}
 
+
+
+def _tool_routes(graph: Graph, args: dict) -> dict:
+    """HTTP routes with handler and callees."""
+    path_filter = (args.get("filter") or "").lower()
+    zone_filter = args.get("zone")
+
+    routes = []
+    for fn in graph.functions.values():
+        if not fn.route:
+            continue
+        if zone_filter:
+            fn_zone = _infer_zone(fn.file)
+            if fn_zone != zone_filter:
+                continue
+        if path_filter and path_filter not in fn.route.lower():
+            continue
+
+        callees = [
+            e.target_fn.split("::")[-1]
+            for e in graph.callees(fn.id)
+        ]
+        routes.append({
+            "method": fn.http_method or "GET",
+            "path": fn.route,
+            "handler": fn.name,
+            "file": fn.file,
+            "calls": callees[:8],
+        })
+
+    routes.sort(key=lambda r: (r["file"], r["path"]))
+
+    if not routes:
+        return {
+            "count": 0, "routes": [],
+            "note": "No routes found. Project may not use decorators.",
+        }
+
+    return {"count": len(routes), "routes": routes}
 
 
 # ---------------------------------------------------------------------------
