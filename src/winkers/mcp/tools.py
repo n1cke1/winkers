@@ -57,19 +57,20 @@ def register_tools(
             Tool(
                 name="hotspots",
                 description=(
-                    "Critical dependency graph: functions with 10+ callers and"
-                    " WHO calls them. These are high-impact functions —"
+                    "Critical dependency graph: functions with many callers and"
+                    " WHO calls them. These are high-impact functions --"
                     " changing their signature or behavior affects many callers."
                     " ALWAYS check this before modifying a frequently-called function."
                     " Each entry shows the function, its callers list, and the"
                     " call expressions so you understand HOW it's being used."
+                    " Try min_callers=5 for small projects, 10 for large ones."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "min_callers": {
                             "type": "integer",
-                            "description": "Minimum callers threshold (default: 10)",
+                            "description": "Minimum callers (default 10, use 5 for small projects)",
                         },
                     },
                 },
