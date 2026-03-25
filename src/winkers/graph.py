@@ -258,43 +258,60 @@ class GraphBuilder:
 
         matches = self._parser.query_matches(parse_result, profile.decorator_query)
 
+        # Collect all decorator args per function (query returns
+        # separate matches for each argument in argument_list)
+        fn_dec: dict[str, dict] = {}
         for _pattern_idx, capture_dict in matches:
             dec_name_nodes = capture_dict.get("dec.name", [])
-            dec_arg_nodes = capture_dict.get("dec.arg", [])
             fn_name_nodes = capture_dict.get("dec.fn_name", [])
+            dec_arg_nodes = capture_dict.get("dec.arg", [])
 
-            if not dec_name_nodes or not dec_arg_nodes or not fn_name_nodes:
+            if not dec_name_nodes or not fn_name_nodes:
                 continue
 
-            dec_text = parse_result.text(dec_name_nodes[0])
-            arg_text = parse_result.text(dec_arg_nodes[0]).strip("\"'")
             fn_name = parse_result.text(fn_name_nodes[0])
-            fn_id = f"{rel}::{fn_name}"
+            if fn_name not in fn_dec:
+                fn_dec[fn_name] = {
+                    "dec_text": parse_result.text(dec_name_nodes[0]),
+                    "args": [],
+                }
+            for node in dec_arg_nodes:
+                fn_dec[fn_name]["args"].append(parse_result.text(node))
 
+        for fn_name, info in fn_dec.items():
+            fn_id = f"{rel}::{fn_name}"
             fn = graph.functions.get(fn_id)
             if fn is None:
                 continue
 
-            # Match decorator name: app.route, app.get, bp.post, etc.
-            parts = dec_text.rsplit(".", 1)
+            parts = info["dec_text"].rsplit(".", 1)
             method_name = parts[-1].lower() if parts else ""
-
             if method_name not in METHODS_MAP:
                 continue
 
-            http_method = METHODS_MAP[method_name]
-            # For @app.route, check methods= kwarg
-            if method_name == "route":
-                for node in dec_arg_nodes:
-                    text = parse_result.text(node)
-                    if "POST" in text.upper():
-                        http_method = "POST"
-                    elif "PUT" in text.upper():
-                        http_method = "PUT"
-                    elif "DELETE" in text.upper():
-                        http_method = "DELETE"
+            # Find path: first arg starting with /
+            route_path = ""
+            for arg in info["args"]:
+                raw = arg.strip("\"'")
+                if raw.startswith("/"):
+                    route_path = raw
+                    break
+            if not route_path:
+                continue
 
-            fn.route = arg_text
+            http_method = METHODS_MAP[method_name]
+            if method_name == "route":
+                for arg in info["args"]:
+                    upper = arg.upper()
+                    if "METHODS" in upper:
+                        if "POST" in upper:
+                            http_method = "POST"
+                        elif "PUT" in upper:
+                            http_method = "PUT"
+                        elif "DELETE" in upper:
+                            http_method = "DELETE"
+
+            fn.route = route_path
             fn.http_method = http_method
 
     def _extract_docstring(self, fn_node, parse_result: ParseResult) -> str | None:
