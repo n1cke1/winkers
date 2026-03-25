@@ -425,13 +425,12 @@ def _get_hotspots(graph: Graph, top: int = 5) -> list[dict]:
 
 
 def _recent_changes(fn: Any, root: Path, limit: int = 5) -> list[dict]:
-    """Return recent git commits touching the function's line range."""
+    """Return recent git commits touching the function's file."""
     try:
         result = subprocess.run(
             [
                 "git", "log", f"-{limit}", "--pretty=format:%H|%an|%ae|%ad|%s",
-                "--date=short",
-                f"-L{fn.line_start},{fn.line_end}:{fn.file}",
+                "--date=short", "--", fn.file,
             ],
             capture_output=True, text=True, cwd=str(root), timeout=5,
         )
