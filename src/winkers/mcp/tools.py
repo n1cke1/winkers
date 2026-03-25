@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from winkers.models import FileNode, Graph
+from winkers.models import Graph
 
 
 def register_tools(
@@ -29,6 +29,7 @@ def register_tools(
                     " and before_writing_code checklist that you MUST follow."
                     " Ignoring these causes architectural damage."
                     " Also returns: zones with intents, hotspots."
+                    " Use routes() tool for HTTP endpoints."
                     " Use zone/file filters to narrow down."
                 ),
                 inputSchema={
@@ -87,6 +88,28 @@ def register_tools(
                     },
                 },
             ),
+            Tool(
+                name="routes",
+                description=(
+                    "HTTP routes (Flask, FastAPI, etc.): method, path,"
+                    " handler function, and what each handler calls."
+                    " Use to find analogous endpoints before adding new ones."
+                    " Filter by path pattern or zone."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "filter": {
+                            "type": "string",
+                            "description": "Filter routes by path substring (e.g. 'carbon')",
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Filter routes by zone name",
+                        },
+                    },
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -110,6 +133,8 @@ def register_tools(
             result = _tool_hotspots(graph, arguments)
         elif name == "scope":
             result = _tool_scope(graph, arguments, root)
+        elif name == "routes":
+            result = _tool_routes(graph, arguments)
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -168,34 +193,14 @@ def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "imports_from": _zone_imports_from(z, zones, graph),
             "imported_by": _zone_imported_by(z, zones, graph),
         }
-        # Routes for this zone
-        routes = []
-        helpers = []
-        for f in files:
-            for fn_id in graph.files.get(f, FileNode(
-                path=f, language="", imports=[], function_ids=[],
-            )).function_ids:
-                fn = graph.functions.get(fn_id)
-                if fn is None:
-                    continue
-                if fn.route:
-                    callees = [
-                        e.target_fn.split("::")[-1]
-                        for e in graph.callees(fn_id)
-                    ]
-                    routes.append({
-                        "method": fn.http_method or "GET",
-                        "path": fn.route,
-                        "handler": fn.name,
-                        "calls": callees[:5],
-                    })
-                else:
-                    helpers.append(fn.name)
-
-        if routes:
-            entry["routes"] = routes
-            if helpers:
-                entry["helpers"] = helpers
+        # Count routes in this zone (details via routes() tool)
+        route_count = sum(
+            1 for f in files
+            for fn_id in (graph.files[f].function_ids if f in graph.files else [])
+            if graph.functions.get(fn_id) and graph.functions[fn_id].route
+        )
+        if route_count:
+            entry["routes_count"] = route_count
 
         if semantic and z in semantic.zone_intents:
             intent = semantic.zone_intents[z]
@@ -380,6 +385,45 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
 
     return {"error": "Provide 'function' or 'file' argument"}
 
+
+
+def _tool_routes(graph: Graph, args: dict) -> dict:
+    """HTTP routes with handler and callees."""
+    path_filter = (args.get("filter") or "").lower()
+    zone_filter = args.get("zone")
+
+    routes = []
+    for fn in graph.functions.values():
+        if not fn.route:
+            continue
+        if zone_filter:
+            fn_zone = _infer_zone(fn.file)
+            if fn_zone != zone_filter:
+                continue
+        if path_filter and path_filter not in fn.route.lower():
+            continue
+
+        callees = [
+            e.target_fn.split("::")[-1]
+            for e in graph.callees(fn.id)
+        ]
+        routes.append({
+            "method": fn.http_method or "GET",
+            "path": fn.route,
+            "handler": fn.name,
+            "file": fn.file,
+            "calls": callees[:8],
+        })
+
+    routes.sort(key=lambda r: (r["file"], r["path"]))
+
+    if not routes:
+        return {
+            "count": 0, "routes": [],
+            "note": "No routes found. Project may not use decorators.",
+        }
+
+    return {"count": len(routes), "routes": routes}
 
 
 # ---------------------------------------------------------------------------
