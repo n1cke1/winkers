@@ -274,6 +274,43 @@ def _install_claude_code(root: Path) -> None:
     )
     click.echo(f"  [ok] MCP server registered (user scope): {claude_json}")
 
+    _install_session_hook(root, winkers_bin)
+
+
+def _install_session_hook(root: Path, winkers_bin: str) -> None:
+    """Register SessionEnd hook in .claude/settings.json for auto-recording."""
+    settings_path = root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+
+    hooks = settings.setdefault("hooks", {})
+    session_end = hooks.setdefault("SessionEnd", [])
+
+    # Check if already installed
+    for entry in session_end:
+        for hook in entry.get("hooks", []):
+            if "winkers" in hook.get("command", ""):
+                click.echo("  [ok] SessionEnd hook already installed.")
+                return
+
+    session_end.append({
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": f"{winkers_bin} record --hook",
+            "timeout": 60,
+        }],
+    })
+
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    click.echo(f"  [ok] SessionEnd hook installed: {settings_path}")
+
 
 def _install_cursor(root: Path) -> None:
     import shutil
