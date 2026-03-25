@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Winkers — Dependency Graph</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; display: flex; flex-direction: column; height: 100vh; }
@@ -133,6 +135,7 @@
     <input id="search" type="text" placeholder="Search functions…">
     <select id="zone-filter"><option value="">All zones</option></select>
     <select id="layout-select">
+      <option value="dagre">Dagre (flow)</option>
       <option value="cose">Force (cose)</option>
       <option value="breadthfirst">Tree</option>
       <option value="circle">Circle</option>
@@ -378,7 +381,14 @@ function renderGraph(data) {
 
 function applyLayout() {
   const name = document.getElementById('layout-select').value;
-  cy.layout({ name, animate: true, animationDuration: 400, randomize: false }).run();
+  const opts = { name, animate: true, animationDuration: 400, randomize: false };
+  if (name === 'dagre') {
+    opts.rankDir = 'TB';
+    opts.nodeSep = 40;
+    opts.rankSep = 60;
+    opts.edgeSep = 20;
+  }
+  cy.layout(opts).run();
 }
 
 function populateZoneFilter(nodes) {
