@@ -80,6 +80,8 @@ def _build_record(entries: list[dict]) -> SessionRecord:
                 model = msg.get("model", "")
 
             for block in msg.get("content", []):
+                if not isinstance(block, dict):
+                    continue
                 if block.get("type") != "tool_use":
                     continue
 
@@ -130,6 +132,8 @@ def _build_record(entries: list[dict]) -> SessionRecord:
 def _extract_human_text(entry: dict) -> str:
     """Get plain text from a user message (skip tool_result blocks)."""
     for block in entry.get("message", {}).get("content", []):
+        if not isinstance(block, dict):
+            continue
         if block.get("type") == "text":
             text = block.get("text", "").strip()
             if text and len(text) > 2:
@@ -248,6 +252,8 @@ def _detect_test_results(entries: list[dict]) -> bool | None:
         if entry.get("type") != "user":
             continue
         result = entry.get("toolUseResult", {})
+        if not isinstance(result, dict):
+            continue
         stdout = result.get("stdout", "")
         if not stdout:
             continue
