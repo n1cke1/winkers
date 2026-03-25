@@ -242,6 +242,40 @@ def create_app(root: Path) -> web.Application:
             })
         return web.json_response(result)
 
+    async def handle_tool_stats(request: web.Request) -> web.Response:
+        from winkers.session_store import SessionStore
+
+        sessions = SessionStore(root).load_all()
+        stats: dict[str, dict] = {}
+        for s in sessions:
+            for tc in s.session.tool_calls:
+                name = tc.name
+                if name not in stats:
+                    stats[name] = {
+                        "calls": 0,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                    }
+                stats[name]["calls"] += 1
+                stats[name]["tokens_in"] += tc.tokens_in
+                stats[name]["tokens_out"] += tc.tokens_out
+
+        result = []
+        for name, st in sorted(
+            stats.items(), key=lambda x: x[1]["tokens_in"] + x[1]["tokens_out"], reverse=True,
+        ):
+            total = st["tokens_in"] + st["tokens_out"]
+            avg = total // st["calls"] if st["calls"] else 0
+            result.append({
+                "name": name,
+                "calls": st["calls"],
+                "tokens_in": st["tokens_in"],
+                "tokens_out": st["tokens_out"],
+                "tokens_total": total,
+                "tokens_avg": avg,
+            })
+        return web.json_response(result)
+
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/graph", handle_graph)
@@ -252,6 +286,7 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/source", handle_source)
     app.router.add_get("/api/sessions", handle_sessions)
     app.router.add_get("/api/insights", handle_insights)
+    app.router.add_get("/api/tool-stats", handle_tool_stats)
     app.router.add_get("/ws", handle_ws)
     return app
 

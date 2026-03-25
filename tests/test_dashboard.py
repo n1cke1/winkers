@@ -305,3 +305,47 @@ async def test_index_has_learning_tab(client):
     text = await resp.text()
     assert "Agent Learning" in text
     assert "session-select" in text
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_empty(client):
+    resp = await client.get("/api/tool-stats")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data == []
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_with_data(graph_project):
+    """Tool stats aggregates token usage across sessions."""
+    from winkers.models import ScoredSession, SessionRecord, ToolCall
+    from winkers.session_store import SessionStore
+
+    store = SessionStore(graph_project)
+    session = SessionRecord(
+        session_id="ts-s1",
+        started_at="2026-03-25T10:00:00Z",
+        completed_at="2026-03-25T10:30:00Z",
+        task_hash="abc",
+        tool_calls=[
+            ToolCall(name="Read", tokens_in=500, tokens_out=20),
+            ToolCall(name="Read", tokens_in=600, tokens_out=25),
+            ToolCall(name="Edit", tokens_in=800, tokens_out=50),
+            ToolCall(name="mcp__winkers__map", tokens_in=300, tokens_out=200),
+        ],
+    )
+    store.save(ScoredSession(session=session))
+
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/tool-stats")
+        assert resp.status == 200
+        data = await resp.json()
+        assert len(data) == 3
+
+        by_name = {d["name"]: d for d in data}
+        assert by_name["Read"]["calls"] == 2
+        assert by_name["Read"]["tokens_in"] == 1100
+        assert by_name["Read"]["tokens_avg"] == (1100 + 45) // 2
+        assert by_name["Edit"]["calls"] == 1
+        assert by_name["mcp__winkers__map"]["calls"] == 1

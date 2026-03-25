@@ -115,6 +115,14 @@
   .savings-bar { background: #0f1117; border-radius: 8px; padding: 12px 16px; display: flex; gap: 24px; font-size: 13px; margin-bottom: 16px; }
   .savings-bar .sv-num { font-size: 18px; font-weight: 700; color: #a78bfa; }
   .savings-bar .sv-label { font-size: 11px; color: #64748b; }
+
+  /* Tool stats table */
+  .tool-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .tool-table th { text-align: left; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 10px; border-bottom: 1px solid #2d3148; }
+  .tool-table td { padding: 6px 10px; border-bottom: 1px solid #1a1d27; color: #e2e8f0; }
+  .tool-table tr:hover { background: #1a1d27; }
+  .tool-table .tn { color: #a78bfa; font-weight: 600; font-family: monospace; }
+  .tool-table .num { text-align: right; font-family: monospace; }
 </style>
 </head>
 <body>
@@ -196,6 +204,10 @@
     <div class="learning-section">
       <h3>Knowledge Gaps</h3>
       <div id="insights-list"></div>
+    </div>
+    <div class="learning-section">
+      <h3>Tool Token Usage</h3>
+      <div id="tool-stats"></div>
     </div>
     <div class="learning-section">
       <h3>Sessions</h3>
@@ -844,13 +856,20 @@ function normPath(p) {
   return p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '');
 }
 
+function fmtK(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
 // --- Agent Learning page ---
 async function loadLearningPage() {
-  const [sessRes, insRes] = await Promise.all([
-    fetch('/api/sessions'), fetch('/api/insights')
+  const [sessRes, insRes, toolRes] = await Promise.all([
+    fetch('/api/sessions'), fetch('/api/insights'), fetch('/api/tool-stats')
   ]);
   const sessions = sessRes.ok ? await sessRes.json() : [];
   const insights = insRes.ok ? await insRes.json() : [];
+  const toolStats = toolRes.ok ? await toolRes.json() : [];
 
   // Savings bar
   const bar = document.getElementById('savings-bar');
@@ -877,6 +896,27 @@ async function loadLearningPage() {
         <div class="ic-meta">${i.turns_wasted} turns wasted | target: ${i.semantic_target}</div>
       </div>`;
     }).join('');
+  }
+
+  // Tool stats
+  const tDiv = document.getElementById('tool-stats');
+  if (toolStats.length === 0) {
+    tDiv.innerHTML = '<div style="color:#64748b;font-size:13px">No tool data yet. Run: winkers record</div>';
+  } else {
+    const rows = toolStats.map(t => {
+      return `<tr>
+        <td class="tn">${t.name}</td>
+        <td class="num">${t.calls}</td>
+        <td class="num">${fmtK(t.tokens_in)}</td>
+        <td class="num">${fmtK(t.tokens_out)}</td>
+        <td class="num">${fmtK(t.tokens_total)}</td>
+        <td class="num">${fmtK(t.tokens_avg)}</td>
+      </tr>`;
+    }).join('');
+    tDiv.innerHTML = `<table class="tool-table">
+      <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">In</th><th class="num">Out</th><th class="num">Total</th><th class="num">Avg/call</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   }
 
   // Sessions
