@@ -277,8 +277,11 @@ def _install_claude_code(root: Path) -> None:
     _install_session_hook(root, winkers_bin)
 
 
+WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
+
+
 def _install_session_hook(root: Path, winkers_bin: str) -> None:
-    """Register SessionEnd hook in .claude/settings.json for auto-recording."""
+    """Register SessionEnd hook + tool permissions in .claude/settings.json."""
     settings_path = root / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -289,27 +292,46 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
         except Exception:
             settings = {}
 
+    changed = False
+
+    # --- SessionEnd hook ---
     hooks = settings.setdefault("hooks", {})
     session_end = hooks.setdefault("SessionEnd", [])
 
-    # Check if already installed
-    for entry in session_end:
-        for hook in entry.get("hooks", []):
-            if "winkers" in hook.get("command", ""):
-                click.echo("  [ok] SessionEnd hook already installed.")
-                return
+    hook_exists = any(
+        "winkers" in hook.get("command", "")
+        for entry in session_end
+        for hook in entry.get("hooks", [])
+    )
+    if hook_exists:
+        click.echo("  [ok] SessionEnd hook already installed.")
+    else:
+        session_end.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": f"{winkers_bin} record --hook",
+                "timeout": 60,
+            }],
+        })
+        click.echo("  [ok] SessionEnd hook installed.")
+        changed = True
 
-    session_end.append({
-        "matcher": "",
-        "hooks": [{
-            "type": "command",
-            "command": f"{winkers_bin} record --hook",
-            "timeout": 60,
-        }],
-    })
+    # --- Tool permissions ---
+    permissions = settings.setdefault("permissions", {})
+    allow = permissions.setdefault("allow", [])
 
-    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-    click.echo(f"  [ok] SessionEnd hook installed: {settings_path}")
+    if WINKERS_TOOLS_PERMISSION not in allow:
+        allow.append(WINKERS_TOOLS_PERMISSION)
+        click.echo(f"  [ok] Tool permissions added: {WINKERS_TOOLS_PERMISSION}")
+        changed = True
+    else:
+        click.echo("  [ok] Tool permissions already set.")
+
+    if changed:
+        settings_path.write_text(
+            json.dumps(settings, indent=2), encoding="utf-8",
+        )
 
 
 def _install_cursor(root: Path) -> None:
