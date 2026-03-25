@@ -19,21 +19,26 @@ dependency graph and avoid breaking callers.
 ## Workflow
 
 1. **Understand structure**
-   `map(detail="zones")` — see zones, hotspots, dependency directions.
+   `map()` — constraints, conventions, zones, hotspots. Call first.
 
 2. **Inspect the area**
-   `map(detail="files", zone="<zone>")` — files with locked/free functions.
+   `map(zone="<zone>")` or `map(file="<path>")` — narrow to specific zone/file.
 
 3. **Get constraints**
    `scope(file="<path>")` — for each file you'll modify.
    Returns locked functions, their callers, safe vs breaking changes.
 
 4. **After writing code**
-   `analyze(files=["<changed>", ...])` — verify no violations.
+   `scope(function="<name>")` — verify callers are not broken.
+
+## Other tools
+
+- `functions_graph()` — full indexed function list with caller counts.
+- `hotspots()` — functions with many callers; high-impact to change.
+- `routes()` — HTTP endpoints: method, path, handler, callees.
 
 ## Key rules
 
 - **locked** function = has callers depending on signature.
   Never change param types, order, or return type without updating all callers.
 - **free** function = no callers. Modify freely.
-- Zero violations from `analyze` before committing.

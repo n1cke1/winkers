@@ -359,9 +359,32 @@ def _install_claude_code(root: Path) -> None:
     click.echo(f"  [ok] MCP server registered (user scope): {claude_json}")
 
     _install_session_hook(root, winkers_bin)
+    _install_claude_md_snippet(root)
 
 
 WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
+
+
+def _install_claude_md_snippet(root: Path) -> None:
+    """Append Winkers MCP usage instructions to CLAUDE.md if not present."""
+    claude_md = root / "CLAUDE.md"
+    snippet = (_templates_dir() / "claude_code" / "claude_md_snippet.md").read_text(
+        encoding="utf-8"
+    )
+    marker = "## Architectural context (Winkers)"
+
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if marker in existing:
+            click.echo("  [ok] CLAUDE.md already has Winkers section.")
+            return
+        claude_md.write_text(
+            existing.rstrip() + "\n\n" + snippet, encoding="utf-8"
+        )
+    else:
+        claude_md.write_text(snippet, encoding="utf-8")
+
+    click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
 
 
 def _install_session_hook(root: Path, winkers_bin: str) -> None:
@@ -382,16 +405,18 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
     hooks = settings.setdefault("hooks", {})
     session_end = hooks.setdefault("SessionEnd", [])
 
-    hook_exists = any(
-        "winkers" in hook.get("command", "")
+    # Use forward slashes: Claude Code hooks run in Git Bash on Windows
+    hook_bin = winkers_bin.replace("\\", "/")
+
+    # --- record hook ---
+    record_exists = any(
+        "record" in hook.get("command", "")
         for entry in session_end
         for hook in entry.get("hooks", [])
     )
-    if hook_exists:
-        click.echo("  [ok] SessionEnd hook already installed.")
+    if record_exists:
+        click.echo("  [ok] SessionEnd record hook already installed.")
     else:
-        # Use forward slashes: Claude Code hooks run in Git Bash on Windows
-        hook_bin = winkers_bin.replace("\\", "/")
         session_end.append({
             "matcher": "",
             "hooks": [{
@@ -400,7 +425,32 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
                 "timeout": 60,
             }],
         })
-        click.echo("  [ok] SessionEnd hook installed.")
+        click.echo("  [ok] SessionEnd record hook installed.")
+        changed = True
+
+    # --- autocommit hook ---
+    autocommit_cmd = (
+        "git add -A && git diff --cached --quiet"
+        " || git commit -m 'wip: auto-commit from Claude session'"
+        " --no-verify"
+    )
+    autocommit_exists = any(
+        "auto-commit" in hook.get("command", "")
+        for entry in session_end
+        for hook in entry.get("hooks", [])
+    )
+    if autocommit_exists:
+        click.echo("  [ok] SessionEnd autocommit hook already installed.")
+    else:
+        session_end.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": autocommit_cmd,
+                "timeout": 30,
+            }],
+        })
+        click.echo("  [ok] SessionEnd autocommit hook installed.")
         changed = True
 
     # --- Tool permissions ---
@@ -869,5 +919,7 @@ def dashboard(path: str, port: int, no_browser: bool):
     if not no_browser:
         webbrowser.open(url)
     run_dashboard(root, port=port)
+
+
 
 
