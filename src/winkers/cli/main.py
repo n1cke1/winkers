@@ -85,6 +85,7 @@ def init(path: str, no_semantic: bool):
 
     store = GraphStore(root)
     store.save(graph)
+    _save_history_snapshot(root, graph)
 
     _update_gitignore(root)
 
@@ -99,6 +100,22 @@ def init(path: str, no_semantic: bool):
         _run_semantic_enrichment(root, graph)
 
     _autodetect_ide(root)
+
+
+def _save_history_snapshot(root: Path, graph) -> None:
+    """Save a timestamped copy of graph.json to .winkers/history/."""
+    from datetime import datetime
+
+    history_dir = root / ".winkers" / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    snapshot_path = history_dir / f"{ts}.json"
+    snapshot_path.write_text(
+        graph.model_dump_json(indent=2, exclude_defaults=True),
+        encoding="utf-8",
+    )
+    click.echo(f"  [ok] History snapshot: {snapshot_path.name}")
 
 
 def _load_dotenv(root: Path) -> None:
