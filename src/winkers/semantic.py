@@ -16,6 +16,7 @@ from winkers.store import STORE_DIR
 
 SEMANTIC_FILE = "semantic.json"
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 SYSTEM_PROMPT = """\
 Read this project's source code and dependency graph.
@@ -282,13 +283,45 @@ class SemanticEnricher:
         user_msg += "\n\n---\n\nJSON schema:\n" + SCHEMA_TEXT
 
         _start = time.monotonic()
-        try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
+        models = [self._model]
+        if self._model != FALLBACK_MODEL:
+            models.append(FALLBACK_MODEL)
+
+        last_error = None
+        used_model = self._model
+        response = None
+
+        for model in models:
+            for attempt in range(3):
+                try:
+                    response = self._client.messages.create(
+                        model=model,
+                        max_tokens=4096,
+                        system=SYSTEM_PROMPT,
+                        messages=[{"role": "user", "content": user_msg}],
+                    )
+                    used_model = model
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e)
+                    if "529" in err_str or "overloaded" in err_str.lower():
+                        wait = (attempt + 1) * 5
+                        time.sleep(wait)
+                        continue
+                    raise RuntimeError(
+                        f"Semantic enrichment failed: {e}"
+                    ) from e
+            if response is not None:
+                break
+
+        if response is None:
+            raise RuntimeError(
+                f"Semantic enrichment failed after retries: {last_error}"
             )
+
+        try:
             text = response.content[0].text
             if text.strip().startswith("```"):
                 text = text.strip().split("\n", 1)[-1]
@@ -301,7 +334,7 @@ class SemanticEnricher:
         usage = getattr(response, "usage", None)
         elapsed = time.monotonic() - _start
         layer.meta = {
-            "model": self._model,
+            "model": used_model,
             "graph_hash": _graph_hash(graph, root),
             "input_tokens": getattr(usage, "input_tokens", 0),
             "output_tokens": getattr(usage, "output_tokens", 0),
