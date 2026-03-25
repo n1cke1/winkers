@@ -248,6 +248,32 @@ def _install_claude_code(root: Path) -> None:
     )
     click.echo(f"  [ok] MCP server registered (user scope): {claude_json}")
 
+    _install_tool_permissions(root)
+
+
+def _install_tool_permissions(root: Path) -> None:
+    """Add mcp__winkers__* to .claude/settings.json permissions."""
+    settings_path = root / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+
+    permission = "mcp__winkers__*"
+    allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+
+    if permission in allow:
+        click.echo("  [ok] Tool permissions already set.")
+        return
+
+    allow.append(permission)
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    click.echo(f"  [ok] Tool permissions added: {permission}")
+
 
 def _install_cursor(root: Path) -> None:
     import shutil

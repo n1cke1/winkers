@@ -54,8 +54,12 @@ def test_init_autodetects_claude_code(project: Path):
     # MCP config goes to ~/.claude.json (user scope only)
     claude_json = Path.home() / ".claude.json"
     assert claude_json.exists()
-    # No project-level settings.json
-    assert not (project / ".claude" / "settings.json").exists()
+    # Project-level settings.json has tool permissions
+    proj_settings = project / ".claude" / "settings.json"
+    assert proj_settings.exists()
+    import json as _json
+    data = _json.loads(proj_settings.read_text(encoding="utf-8"))
+    assert "mcp__winkers__*" in data.get("permissions", {}).get("allow", [])
 
 
 def test_init_autodetects_cursor(project: Path):
