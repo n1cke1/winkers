@@ -67,6 +67,8 @@ def init(path: str, no_semantic: bool):
     click.echo("Resolving cross-file calls ...")
     CrossFileResolver().resolve(graph, str(root))
 
+    _collect_git_history(root, graph)
+
     store = GraphStore(root)
     store.save(graph)
 
@@ -83,6 +85,59 @@ def init(path: str, no_semantic: bool):
         _run_semantic_enrichment(root, graph)
 
     _autodetect_ide(root)
+
+
+def _collect_git_history(root: Path, graph) -> None:
+    """Collect recent git commits per file and store in graph."""
+    import subprocess
+    import sys
+
+    try:
+        kwargs: dict = {
+            "capture_output": True, "text": True,
+            "cwd": str(root), "timeout": 15,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(
+            ["git", "log", "-20", "--pretty=format:%H|%an|%ad|%s",
+             "--date=short", "--name-only"],
+            **kwargs,
+        )
+    except Exception:
+        return
+
+    if result.returncode != 0:
+        return
+
+    # Parse: commit lines alternate with file lists
+    commits_by_file: dict[str, list[dict]] = {}
+    current_commit: dict | None = None
+
+    for line in result.stdout.splitlines():
+        if "|" in line and len(line.split("|", 3)) == 4:
+            sha, author, date, message = line.split("|", 3)
+            current_commit = {
+                "sha": sha[:8], "author": author,
+                "date": date, "message": message,
+            }
+        elif line.strip() and current_commit:
+            path = line.strip().replace("\\", "/")
+            if path not in commits_by_file:
+                commits_by_file[path] = []
+            if len(commits_by_file[path]) < 5:
+                commits_by_file[path].append(current_commit)
+
+    count = 0
+    for path, file_node in graph.files.items():
+        norm = path.replace("\\", "/")
+        if norm in commits_by_file:
+            file_node.recent_commits = commits_by_file[norm]
+            count += 1
+
+    if count:
+        click.echo(f"  [ok] Git history: {count} files with commits")
 
 
 def _load_dotenv(root: Path) -> None:

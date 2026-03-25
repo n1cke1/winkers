@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -327,7 +325,7 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
             ],
             "constraints": _build_constraints(fn, caller_edges),
             "related_constraints": _related_constraints(fn, root),
-            "recent_changes": _recent_changes(fn, root) if root else [],
+            "recent_changes": _recent_changes_from_graph(fn, graph),
         }
 
     if file_path:
@@ -425,47 +423,12 @@ def _get_hotspots(graph: Graph, top: int = 5) -> list[dict]:
     ]
 
 
-def _safe_git(args: list[str], cwd: str, timeout: int = 5) -> subprocess.CompletedProcess:
-    """Run git with timeout that actually works on Windows."""
-    kwargs: dict[str, Any] = {
-        "capture_output": True, "text": True, "cwd": cwd, "timeout": timeout,
-    }
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    return subprocess.run(args, **kwargs)
-
-
-def _recent_changes(fn: Any, root: Path, limit: int = 5) -> list[dict]:
-    """Return recent git commits touching the function's file."""
-    try:
-        result = _safe_git(
-            [
-                "git", "log", f"-{limit}", "--pretty=format:%H|%an|%ae|%ad|%s",
-                "--date=short", "--", fn.file,
-            ],
-            cwd=str(root),
-        )
-        commits = []
-        for line in result.stdout.splitlines():
-            if "|" not in line:
-                continue
-            parts = line.split("|", 4)
-            if len(parts) < 5:
-                continue
-            sha, author, email, date, message = parts
-            commits.append({
-                "sha": sha[:8],
-                "author": author,
-                "author_type": (
-                    "agent" if "bot" in email.lower() or "claude" in email.lower()
-                    else "human"
-                ),
-                "date": date,
-                "message": message,
-            })
-        return commits
-    except Exception:
+def _recent_changes_from_graph(fn: Any, graph: Graph) -> list[dict]:
+    """Return recent commits from pre-collected graph data."""
+    file_node = graph.files.get(fn.file)
+    if not file_node or not file_node.recent_commits:
         return []
+    return file_node.recent_commits
 
 
 def _related_constraints(fn: Any, root: Path | None) -> list[dict]:
