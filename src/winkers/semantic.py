@@ -264,16 +264,22 @@ class SemanticEnricher:
         self._client = anthropic.Anthropic(**kwargs)
         self._model = os.environ.get("WINKERS_MODEL", DEFAULT_MODEL)
 
-    def enrich(self, graph: Graph, root: Path) -> SemanticLayer:
-        """One API call — send project code, get semantic layer back."""
+    def enrich(
+        self, graph: Graph, root: Path,
+        insights_text: str = "",
+    ) -> SemanticLayer:
+        """One API call -- send project code, get semantic layer back."""
         project_text = _build_project_summary(graph, root)
 
         user_msg = (
             "Here is the project:\n"
             + project_text
-            + "\n\n---\n\nJSON schema:\n"
-            + SCHEMA_TEXT
         )
+
+        if insights_text:
+            user_msg += "\n\n---\n\n" + insights_text
+
+        user_msg += "\n\n---\n\nJSON schema:\n" + SCHEMA_TEXT
 
         _start = time.monotonic()
         try:
@@ -307,3 +313,47 @@ class SemanticEnricher:
         """Check if any code changed since last enrichment."""
         old_hash = existing.meta.get("graph_hash", "")
         return _graph_hash(graph, root) != old_hash
+
+
+def build_insights_prompt(root: Path) -> str:
+    """Build prompt section from accumulated insights, if any exist."""
+    from winkers.insights_store import InsightsStore
+
+    store = InsightsStore(root)
+    items = store.open_insights()
+    if not items:
+        return ""
+
+    # Filter: high priority, or medium with 2+ occurrences
+    relevant = [
+        i for i in items
+        if i.priority == "high"
+        or (i.priority == "medium" and i.occurrences >= 2)
+    ]
+    if not relevant:
+        return ""
+
+    lines = [
+        "## Known gaps from past agent sessions",
+        "",
+        "Previous AI agent sessions on this project revealed these",
+        "knowledge gaps. Incorporate them into the semantic layer",
+        "(constraints, conventions, zone_intents) so future agents",
+        "have this knowledge before starting work.",
+        "",
+    ]
+
+    by_target: dict[str, list] = {}
+    for item in relevant:
+        by_target.setdefault(item.semantic_target, []).append(item)
+
+    for target, group in sorted(by_target.items()):
+        lines.append(f"### {target}")
+        for item in group:
+            occ = f" (seen {item.occurrences}x)" if item.occurrences > 1 else ""
+            lines.append(
+                f"- [{item.category}]{occ} {item.injection_content}"
+            )
+        lines.append("")
+
+    return "\n".join(lines)

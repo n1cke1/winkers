@@ -1,4 +1,4 @@
-"""Data models for the Winkers dependency graph."""
+"""Data models for the Winkers dependency graph and session recording."""
 
 from pydantic import BaseModel
 
@@ -78,3 +78,68 @@ class Graph(BaseModel):
         """All functions that have at least one incoming call edge."""
         locked_ids = {e.target_fn for e in self.call_edges}
         return [fn for fn in self.functions.values() if fn.id in locked_ids]
+
+
+# ---------------------------------------------------------------------------
+# Session recording models
+# ---------------------------------------------------------------------------
+
+class ToolCall(BaseModel):
+    name: str
+    input_params: dict = {}
+    is_error: bool = False
+    tokens_in: int = 0
+    tokens_out: int = 0
+    timestamp: str = ""
+
+
+class SessionRecord(BaseModel):
+    session_id: str
+    started_at: str
+    completed_at: str
+    model: str = ""
+    task_prompt: str = ""
+    task_hash: str = ""
+
+    tool_calls: list[ToolCall] = []
+    total_turns: int = 0
+    exploration_turns: int = 0
+    modification_turns: int = 0
+    verification_turns: int = 0
+
+    files_read: list[str] = []
+    files_modified: list[str] = []
+    files_created: list[str] = []
+
+    tests_before: int | None = None
+    tests_after: int | None = None
+    tests_passed: bool | None = None
+
+    winkers_calls: dict[str, int] = {}
+    user_corrections: list[str] = []
+    session_end: str = "agent_done"
+
+
+class CommitBinding(BaseModel):
+    status: str = "uncommitted"
+    hash: str | None = None
+    message: str | None = None
+    files_changed: list[str] = []
+    insertions: int = 0
+    deletions: int = 0
+
+
+class DebtDelta(BaseModel):
+    complexity_delta: int = 0
+    max_function_lines: int = 0
+    biggest_file_growth: int = 0
+    import_edges_delta: int = 0
+    files_created: int = 0
+    files_modified: int = 0
+
+
+class ScoredSession(BaseModel):
+    session: SessionRecord
+    commit: CommitBinding = CommitBinding()
+    debt: DebtDelta = DebtDelta()
+    score: float = 0.5

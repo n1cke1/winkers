@@ -195,6 +195,53 @@ def create_app(root: Path) -> web.Application:
             ws_clients.discard(ws)
         return ws
 
+    async def handle_sessions(request: web.Request) -> web.Response:
+        from winkers.scoring import score_label
+        from winkers.session_store import SessionStore
+
+        sessions = SessionStore(root).load_all()
+        result = []
+        for s in sessions:
+            result.append({
+                "session_id": s.session.session_id,
+                "task_prompt": s.session.task_prompt,
+                "started_at": s.session.started_at,
+                "model": s.session.model,
+                "total_turns": s.session.total_turns,
+                "exploration_turns": s.session.exploration_turns,
+                "modification_turns": s.session.modification_turns,
+                "verification_turns": s.session.verification_turns,
+                "files_modified": s.session.files_modified,
+                "files_created": s.session.files_created,
+                "tests_passed": s.session.tests_passed,
+                "session_end": s.session.session_end,
+                "score": s.score,
+                "score_label": score_label(s.score),
+                "commit": s.commit.model_dump(),
+                "debt": s.debt.model_dump(),
+            })
+        return web.json_response(result)
+
+    async def handle_insights(request: web.Request) -> web.Response:
+        from winkers.insights_store import InsightsStore
+
+        store = InsightsStore(root)
+        items = store.open_insights()
+        result = []
+        for item in items:
+            result.append({
+                "category": item.category,
+                "description": item.description,
+                "turns_wasted": item.turns_wasted,
+                "tokens_wasted": item.tokens_wasted,
+                "semantic_target": item.semantic_target,
+                "injection_content": item.injection_content,
+                "priority": item.priority,
+                "occurrences": item.occurrences,
+                "session_ids": item.session_ids,
+            })
+        return web.json_response(result)
+
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/graph", handle_graph)
@@ -203,6 +250,8 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/history", handle_history)
     app.router.add_get("/api/debt", handle_debt)
     app.router.add_get("/api/source", handle_source)
+    app.router.add_get("/api/sessions", handle_sessions)
+    app.router.add_get("/api/insights", handle_insights)
     app.router.add_get("/ws", handle_ws)
     return app
 

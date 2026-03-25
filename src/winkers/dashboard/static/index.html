@@ -74,6 +74,47 @@
   /* Debt layer colors */
   .debt-high { }
   .debt-medium { }
+
+  /* Tab bar */
+  #tab-bar { display: flex; border-bottom: 1px solid #2d3148; background: #1a1d27; }
+  .tab { padding: 8px 16px; font-size: 13px; cursor: pointer; color: #64748b; border-bottom: 2px solid transparent; }
+  .tab:hover { color: #e2e8f0; }
+  .tab.active { color: #a78bfa; border-bottom-color: #a78bfa; }
+  .tab-content { display: none; flex: 1; overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Commit overlay */
+  #commit-panel { display: none; background: #1a1d27; border-top: 1px solid #2d3148; padding: 10px 16px; font-size: 12px; }
+  #commit-panel.visible { display: block; }
+  #commit-summary { color: #94a3b8; line-height: 1.6; }
+  #commit-summary .cs-hash { color: #a78bfa; font-family: monospace; }
+  #commit-summary .cs-msg { color: #e2e8f0; }
+  #commit-summary .cs-score { font-weight: 700; }
+  .score-good { color: #86efac; }
+  .score-ok { color: #fde68a; }
+  .score-weak { color: #fdba74; }
+  .score-poor { color: #fca5a5; }
+
+  /* Agent Learning page */
+  #learning-page { flex: 1; overflow-y: auto; padding: 20px; }
+  .session-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .session-card .sc-title { font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+  .session-card .sc-meta { font-size: 12px; color: #64748b; margin-bottom: 4px; }
+  .session-card .sc-score { font-size: 12px; font-weight: 700; }
+  .insight-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .insight-card .ic-cat { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .insight-card .ic-desc { font-size: 12px; color: #94a3b8; margin: 4px 0; }
+  .insight-card .ic-inject { font-size: 12px; color: #e2e8f0; font-style: italic; }
+  .insight-card .ic-meta { font-size: 11px; color: #64748b; margin-top: 4px; }
+  .priority-high { color: #fca5a5; }
+  .priority-medium { color: #fde68a; }
+  .priority-low { color: #94a3b8; }
+  .learning-section { margin-bottom: 20px; }
+  .learning-section h2 { font-size: 16px; font-weight: 700; color: #a78bfa; margin-bottom: 10px; }
+  .learning-section h3 { font-size: 13px; color: #64748b; margin-bottom: 8px; }
+  .savings-bar { background: #0f1117; border-radius: 8px; padding: 12px 16px; display: flex; gap: 24px; font-size: 13px; margin-bottom: 16px; }
+  .savings-bar .sv-num { font-size: 18px; font-weight: 700; color: #a78bfa; }
+  .savings-bar .sv-label { font-size: 11px; color: #64748b; }
 </style>
 </head>
 <body>
@@ -93,12 +134,20 @@
     <button id="preview-btn">Preview</button>
     <button id="debt-btn">Tech Debt</button>
     <button id="history-btn">History</button>
+    <select id="session-select"><option value="">Commit overlay</option></select>
   </div>
   <span id="stats-bar"></span>
 </header>
 
+<div id="tab-bar">
+  <div class="tab active" data-tab="graph-tab">Graph</div>
+  <div class="tab" data-tab="learning-tab">Agent Learning</div>
+</div>
+
 <div id="tooltip"></div>
 
+<div id="graph-tab" class="tab-content active">
+<div id="commit-panel"><div id="commit-summary"></div></div>
 <div id="main">
   <div id="cy"></div>
   <div id="sidebar" class="hidden">
@@ -131,6 +180,29 @@
     </div>
   </div>
 </div>
+</div><!-- /graph-tab -->
+
+<div id="learning-tab" class="tab-content">
+  <div id="learning-page">
+    <div class="learning-section">
+      <h2>Agent Learning</h2>
+      <div id="savings-bar" class="savings-bar" style="display:none">
+        <div><div class="sv-num" id="sv-insights">0</div><div class="sv-label">open insights</div></div>
+        <div><div class="sv-num" id="sv-turns">0</div><div class="sv-label">turns wasted</div></div>
+        <div><div class="sv-num" id="sv-tokens">0</div><div class="sv-label">tokens wasted</div></div>
+        <div><div class="sv-num" id="sv-sessions">0</div><div class="sv-label">sessions</div></div>
+      </div>
+    </div>
+    <div class="learning-section">
+      <h3>Knowledge Gaps</h3>
+      <div id="insights-list"></div>
+    </div>
+    <div class="learning-section">
+      <h3>Sessions</h3>
+      <div id="sessions-list"></div>
+    </div>
+  </div>
+</div><!-- /learning-tab -->
 
 <div id="history-panel">
   <h2>Snapshot History</h2>
@@ -682,9 +754,154 @@ function clearDebtLayer() {
   if (graphData) updateStats(graphData);
 }
 
+// --- Tab switching ---
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'learning-tab') loadLearningPage();
+  });
+});
+
+// --- Commit overlay ---
+let sessionsData = [];
+
+async function loadSessions() {
+  try {
+    const res = await fetch('/api/sessions');
+    if (!res.ok) return;
+    sessionsData = await res.json();
+    populateSessionSelect();
+  } catch(e) {}
+}
+
+function populateSessionSelect() {
+  const sel = document.getElementById('session-select');
+  sel.innerHTML = '<option value="">Commit overlay</option>';
+  sessionsData.forEach((s, i) => {
+    const hash = s.commit?.hash ? s.commit.hash.slice(0,7) : 'uncommitted';
+    const task = s.task_prompt ? s.task_prompt.slice(0,30) : 'session';
+    sel.innerHTML += `<option value="${i}">${hash} - ${task}...</option>`;
+  });
+}
+
+document.getElementById('session-select').addEventListener('change', function() {
+  const idx = this.value;
+  if (idx === '') { clearCommitOverlay(); return; }
+  const session = sessionsData[parseInt(idx)];
+  applyCommitOverlay(session);
+});
+
+function applyCommitOverlay(session) {
+  if (!cy) return;
+  clearDebtLayer();
+
+  const modified = new Set((session.files_modified || []).map(normPath));
+  const created = new Set((session.files_created || []).map(normPath));
+
+  cy.nodes().forEach(n => {
+    const file = normPath(n.data('file') || '');
+    if (created.has(file)) {
+      n.style({'background-color': '#22c55e', 'border-width': 4, 'border-color': '#86efac', 'width': 42, 'height': 42});
+    } else if (modified.has(file)) {
+      n.style({'background-color': '#eab308', 'border-width': 3, 'border-color': '#fde68a'});
+    } else {
+      n.style({'opacity': 0.2});
+    }
+  });
+  cy.edges().style({'opacity': 0.1});
+
+  // Show commit panel
+  const panel = document.getElementById('commit-panel');
+  panel.classList.add('visible');
+  const hash = session.commit?.hash ? session.commit.hash.slice(0,7) : '—';
+  const msg = session.commit?.message || 'uncommitted';
+  const ins = session.commit?.insertions || 0;
+  const del = session.commit?.deletions || 0;
+  const nMod = (session.files_modified || []).length;
+  const nNew = (session.files_created || []).length;
+  const cd = session.debt?.complexity_delta || 0;
+  const ie = session.debt?.import_edges_delta || 0;
+  const sc = (session.score || 0).toFixed(2);
+  const lbl = session.score_label || '';
+  const sClass = 'score-' + lbl;
+  document.getElementById('commit-summary').innerHTML =
+    `<span class="cs-hash">${hash}</span> — <span class="cs-msg">${msg}</span><br>` +
+    `+${ins} -${del} lines | ${nMod} modified, ${nNew} created<br>` +
+    `Debt: complexity ${cd >= 0 ? '+' : ''}${cd} | coupling ${ie >= 0 ? '+' : ''}${ie}<br>` +
+    `Score: <span class="cs-score ${sClass}">${sc} (${lbl})</span>`;
+}
+
+function clearCommitOverlay() {
+  if (cy) { cy.nodes().removeStyle(); cy.edges().removeStyle(); }
+  document.getElementById('commit-panel').classList.remove('visible');
+  if (graphData) updateStats(graphData);
+}
+
+function normPath(p) {
+  return p.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '');
+}
+
+// --- Agent Learning page ---
+async function loadLearningPage() {
+  const [sessRes, insRes] = await Promise.all([
+    fetch('/api/sessions'), fetch('/api/insights')
+  ]);
+  const sessions = sessRes.ok ? await sessRes.json() : [];
+  const insights = insRes.ok ? await insRes.json() : [];
+
+  // Savings bar
+  const bar = document.getElementById('savings-bar');
+  if (insights.length > 0 || sessions.length > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('sv-insights').textContent = insights.length;
+    document.getElementById('sv-turns').textContent = insights.reduce((a,i) => a + (i.turns_wasted||0), 0);
+    document.getElementById('sv-tokens').textContent = insights.reduce((a,i) => a + (i.tokens_wasted||0), 0);
+    document.getElementById('sv-sessions').textContent = sessions.length;
+  }
+
+  // Insights
+  const iList = document.getElementById('insights-list');
+  if (insights.length === 0) {
+    iList.innerHTML = '<div style="color:#64748b;font-size:13px">No insights yet. Run: winkers analyze</div>';
+  } else {
+    iList.innerHTML = insights.map(i => {
+      const pClass = 'priority-' + i.priority;
+      const occ = i.occurrences > 1 ? ` (${i.occurrences}x)` : '';
+      return `<div class="insight-card">
+        <div class="ic-cat ${pClass}">${i.priority.toUpperCase()}${occ} — ${i.category}</div>
+        <div class="ic-desc">${i.description}</div>
+        <div class="ic-inject">${i.injection_content}</div>
+        <div class="ic-meta">${i.turns_wasted} turns wasted | target: ${i.semantic_target}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Sessions
+  const sList = document.getElementById('sessions-list');
+  if (sessions.length === 0) {
+    sList.innerHTML = '<div style="color:#64748b;font-size:13px">No sessions. Run: winkers record</div>';
+  } else {
+    sList.innerHTML = sessions.map(s => {
+      const sClass = 'score-' + (s.score_label || 'ok');
+      const hash = s.commit?.hash ? s.commit.hash.slice(0,7) : '—';
+      const test = s.tests_passed === true ? 'pass' : s.tests_passed === false ? 'fail' : '—';
+      return `<div class="session-card">
+        <div class="sc-title">${s.task_prompt || 'untitled'}</div>
+        <div class="sc-meta">${s.total_turns} turns (${s.exploration_turns}E ${s.modification_turns}M ${s.verification_turns}V) | ${s.model || '?'}</div>
+        <div class="sc-meta">Commit: ${hash} | Tests: ${test} | End: ${s.session_end}</div>
+        <div class="sc-score ${sClass}">Score: ${(s.score||0).toFixed(2)} (${s.score_label || '?'})</div>
+      </div>`;
+    }).join('');
+  }
+}
+
 // Init
 loadGraph();
 loadSemantic();
+loadSessions();
 connectWS();
 </script>
 </body>
