@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import sys
-import time
 from pathlib import Path
 
 from mcp.server import Server
@@ -15,50 +14,15 @@ from winkers.mcp.tools import register_tools
 from winkers.models import Graph
 from winkers.store import GraphStore
 
-# Extensions to scan for auto-rebuild
-_SOURCE_EXTS = {
-    ".py", ".ts", ".tsx", ".js", ".jsx",
-    ".java", ".go", ".rs", ".cs",
-}
-
-
-def _latest_source_mtime(root: Path) -> float:
-    """Return the most recent mtime among source files."""
-    latest = 0.0
-    for p in root.rglob("*"):
-        if p.suffix in _SOURCE_EXTS and ".venv" not in p.parts and "node_modules" not in p.parts:
-            try:
-                latest = max(latest, p.stat().st_mtime)
-            except OSError:
-                pass
-    return latest
-
 
 def create_server(root: Path) -> Server:
     server = Server("winkers")
     store = GraphStore(root)
 
-    state: dict = {
-        "graph": store.load(),
-        "built_at": store.graph_path.stat().st_mtime if store.exists() else 0.0,
-    }
-
-    def _maybe_rebuild() -> Graph | None:
-        """Rebuild graph if any source file is newer than last build."""
-        latest = _latest_source_mtime(root)
-        if latest > state["built_at"] and state["graph"] is not None:
-            from winkers.graph import GraphBuilder
-            from winkers.resolver import CrossFileResolver
-
-            graph = GraphBuilder().build(root)
-            CrossFileResolver().resolve(graph, str(root))
-            store.save(graph)
-            state["graph"] = graph
-            state["built_at"] = time.time()
-        return state["graph"]
+    graph = store.load()
 
     def get_graph() -> Graph | None:
-        return _maybe_rebuild()
+        return graph
 
     register_tools(server, root, get_graph)
     return server

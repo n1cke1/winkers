@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -424,15 +425,25 @@ def _get_hotspots(graph: Graph, top: int = 5) -> list[dict]:
     ]
 
 
+def _safe_git(args: list[str], cwd: str, timeout: int = 5) -> subprocess.CompletedProcess:
+    """Run git with timeout that actually works on Windows."""
+    kwargs: dict[str, Any] = {
+        "capture_output": True, "text": True, "cwd": cwd, "timeout": timeout,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return subprocess.run(args, **kwargs)
+
+
 def _recent_changes(fn: Any, root: Path, limit: int = 5) -> list[dict]:
     """Return recent git commits touching the function's file."""
     try:
-        result = subprocess.run(
+        result = _safe_git(
             [
                 "git", "log", f"-{limit}", "--pretty=format:%H|%an|%ae|%ad|%s",
                 "--date=short", "--", fn.file,
             ],
-            capture_output=True, text=True, cwd=str(root), timeout=5,
+            cwd=str(root),
         )
         commits = []
         for line in result.stdout.splitlines():
