@@ -802,10 +802,15 @@ async function loadSessions() {
 function populateSessionSelect() {
   const sel = document.getElementById('session-select');
   sel.innerHTML = '<option value="">Commit overlay</option>';
+  // Only show sessions with actual commits, group by hash
+  const seen = new Set();
   sessionsData.forEach((s, i) => {
-    const hash = s.commit?.hash ? s.commit.hash.slice(0,7) : 'uncommitted';
-    const task = s.task_prompt ? s.task_prompt.slice(0,30) : 'session';
-    sel.innerHTML += `<option value="${i}">${hash} - ${task}...</option>`;
+    if (!s.commit?.hash || s.commit.status !== 'committed') return;
+    if (seen.has(s.commit.hash)) return;
+    seen.add(s.commit.hash);
+    const hash = s.commit.hash.slice(0,7);
+    const msg = s.commit.message ? s.commit.message.slice(0,30) : '';
+    sel.innerHTML += `<option value="${i}">${hash} ${msg}</option>`;
   });
 }
 
