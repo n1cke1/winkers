@@ -19,10 +19,19 @@ def create_server(root: Path) -> Server:
     server = Server("winkers")
     store = GraphStore(root)
 
-    graph = store.load()
+    state: dict = {
+        "graph": store.load(),
+        "mtime": store.graph_path.stat().st_mtime if store.exists() else 0.0,
+    }
 
     def get_graph() -> Graph | None:
-        return graph
+        # Reload if graph.json was updated (e.g. by winkers init)
+        if store.exists():
+            current_mtime = store.graph_path.stat().st_mtime
+            if current_mtime > state["mtime"]:
+                state["graph"] = store.load()
+                state["mtime"] = current_mtime
+        return state["graph"]
 
     register_tools(server, root, get_graph)
     return server
