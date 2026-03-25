@@ -283,16 +283,45 @@ def _detect_session_end(entries: list[dict]) -> str:
 
 
 def find_project_transcripts(project_path: Path) -> list[Path]:
-    """Find all transcript files for a project in ~/.claude/projects/."""
+    """Find all transcript files for a project in ~/.claude/projects/.
+
+    Instead of guessing Claude Code's path encoding, scan all project
+    directories and match by reading the cwd field from transcripts.
+    """
     claude_dir = Path.home() / ".claude" / "projects"
     if not claude_dir.exists():
         return []
 
-    # Compute project hash: c:\Winkers -> c--Winkers
-    project_str = str(project_path).replace(":", "").replace("\\", "-").replace("/", "-")
+    target = str(project_path).replace("\\", "/").lower().rstrip("/")
+    result: list[Path] = []
 
-    project_dir = claude_dir / project_str
-    if not project_dir.exists():
-        return []
+    for project_dir in claude_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jsonl in project_dir.glob("*.jsonl"):
+            if _transcript_matches_project(jsonl, target):
+                result.append(jsonl)
 
-    return sorted(project_dir.glob("*.jsonl"))
+    return sorted(result)
+
+
+def _transcript_matches_project(jsonl_path: Path, target_lower: str) -> bool:
+    """Check if a transcript belongs to the target project by reading cwd."""
+    try:
+        with jsonl_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                entry = json.loads(line)
+                cwd = entry.get("cwd", "")
+                if cwd:
+                    cwd_norm = cwd.replace("\\", "/").lower().rstrip("/")
+                    return cwd_norm == target_lower
+                # Also check inside message for user entries
+                if entry.get("type") == "user" and entry.get("cwd"):
+                    cwd_norm = entry["cwd"].replace("\\", "/").lower().rstrip("/")
+                    return cwd_norm == target_lower
+    except Exception:
+        pass
+    return False
