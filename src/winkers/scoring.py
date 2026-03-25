@@ -40,8 +40,8 @@ def bind_to_commit(session: SessionRecord, project_path: Path) -> CommitBinding:
     except (ValueError, AttributeError):
         return CommitBinding(status="uncommitted")
 
-    after = (start - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S")
-    before = (end + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    after = (start - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    before = (end + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     try:
         result = subprocess.run(
