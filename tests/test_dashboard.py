@@ -308,11 +308,14 @@ async def test_index_has_learning_tab(client):
 
 
 @pytest.mark.asyncio
-async def test_get_tool_stats_empty(client):
+async def test_get_tool_stats_no_sessions(client):
+    """Without recorded sessions, returns only estimated entries."""
     resp = await client.get("/api/tool-stats")
     assert resp.status == 200
     data = await resp.json()
-    assert data == []
+    # Graph exists so we get estimates, but no recorded entries
+    assert all(d["source"] == "estimated" for d in data)
+    assert all(d["calls"] == 0 for d in data)
 
 
 @pytest.mark.asyncio
@@ -341,11 +344,30 @@ async def test_get_tool_stats_with_data(graph_project):
         resp = await c.get("/api/tool-stats")
         assert resp.status == 200
         data = await resp.json()
-        assert len(data) == 3
 
         by_name = {d["name"]: d for d in data}
         assert by_name["Read"]["calls"] == 2
         assert by_name["Read"]["tokens_in"] == 1100
-        assert by_name["Read"]["tokens_avg"] == (1100 + 45) // 2
+        assert by_name["Read"]["source"] == "recorded"
         assert by_name["Edit"]["calls"] == 1
         assert by_name["mcp__winkers__map"]["calls"] == 1
+        # Recorded map tool should have estimated_out from graph
+        assert "estimated_out" in by_name["mcp__winkers__map"]
+
+
+@pytest.mark.asyncio
+async def test_get_tool_stats_estimated_only(graph_project):
+    """Without sessions, tool stats returns estimates from graph."""
+    app = create_app(graph_project)
+    async with TestClient(TestServer(app)) as c:
+        resp = await c.get("/api/tool-stats")
+        assert resp.status == 200
+        data = await resp.json()
+        # Should have estimated entries from graph
+        assert len(data) > 0
+        assert all(d["source"] == "estimated" for d in data)
+        names = {d["name"] for d in data}
+        assert "mcp__winkers__map" in names
+        assert "mcp__winkers__scope" in names
+        for d in data:
+            assert d["estimated_out"] > 0

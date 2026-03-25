@@ -262,7 +262,9 @@ def create_app(root: Path) -> web.Application:
 
         result = []
         for name, st in sorted(
-            stats.items(), key=lambda x: x[1]["tokens_in"] + x[1]["tokens_out"], reverse=True,
+            stats.items(),
+            key=lambda x: x[1]["tokens_in"] + x[1]["tokens_out"],
+            reverse=True,
         ):
             total = st["tokens_in"] + st["tokens_out"]
             avg = total // st["calls"] if st["calls"] else 0
@@ -273,7 +275,22 @@ def create_app(root: Path) -> web.Application:
                 "tokens_out": st["tokens_out"],
                 "tokens_total": total,
                 "tokens_avg": avg,
+                "source": "recorded",
             })
+
+        # Add estimated stats for Winkers MCP tools from graph
+        estimates = _estimate_mcp_tokens(store.load(), root)
+        recorded_names = {r["name"] for r in result}
+        for est in estimates:
+            if est["name"] not in recorded_names:
+                result.append(est)
+            else:
+                # Enrich recorded entry with estimate
+                for r in result:
+                    if r["name"] == est["name"]:
+                        r["estimated_out"] = est["estimated_out"]
+                        break
+
         return web.json_response(result)
 
     app = web.Application()
@@ -289,6 +306,99 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/tool-stats", handle_tool_stats)
     app.router.add_get("/ws", handle_ws)
     return app
+
+
+def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
+    """Estimate output tokens for each Winkers MCP tool from the current graph."""
+    if graph is None:
+        return []
+
+    from winkers.mcp.tools import (
+        _tool_functions_graph,
+        _tool_hotspots,
+        _tool_map,
+        _tool_scope,
+    )
+
+    estimates = []
+
+    def _chars_to_tokens(text: str) -> int:
+        return len(text) // 4  # ~4 chars per token
+
+    # map()
+    try:
+        result = _tool_map(graph, {}, root)
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__map",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # functions_graph()
+    try:
+        result = _tool_functions_graph(graph)
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__functions_graph",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # hotspots()
+    try:
+        result = _tool_hotspots(graph, {})
+        tokens = _chars_to_tokens(json.dumps(result))
+        estimates.append({
+            "name": "mcp__winkers__hotspots",
+            "calls": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "tokens_total": 0,
+            "tokens_avg": 0,
+            "estimated_out": tokens,
+            "source": "estimated",
+        })
+    except Exception:
+        pass
+
+    # scope() — estimate for average function
+    try:
+        fn_ids = list(graph.functions.keys())
+        if fn_ids:
+            # Pick a median-complexity function
+            by_callers = sorted(fn_ids, key=lambda f: len(graph.callers(f)))
+            mid = by_callers[len(by_callers) // 2]
+            result = _tool_scope(graph, {"function": mid}, root)
+            tokens = _chars_to_tokens(json.dumps(result))
+            estimates.append({
+                "name": "mcp__winkers__scope",
+                "calls": 0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "tokens_total": 0,
+                "tokens_avg": 0,
+                "estimated_out": tokens,
+                "source": "estimated",
+            })
+    except Exception:
+        pass
+
+    return estimates
 
 
 def run(root: Path, host: str = "127.0.0.1", port: int = 7420) -> None:

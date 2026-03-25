@@ -901,16 +901,24 @@ async function loadLearningPage() {
   // Tool stats
   const tDiv = document.getElementById('tool-stats');
   if (toolStats.length === 0) {
-    tDiv.innerHTML = '<div style="color:#64748b;font-size:13px">No tool data yet. Run: winkers record</div>';
+    tDiv.innerHTML = '<div style="color:#64748b;font-size:13px">No tool data yet. Run: winkers record or winkers init</div>';
   } else {
     const rows = toolStats.map(t => {
-      return `<tr>
-        <td class="tn">${t.name}</td>
-        <td class="num">${t.calls}</td>
-        <td class="num">${fmtK(t.tokens_in)}</td>
-        <td class="num">${fmtK(t.tokens_out)}</td>
-        <td class="num">${fmtK(t.tokens_total)}</td>
-        <td class="num">${fmtK(t.tokens_avg)}</td>
+      const isEst = t.source === 'estimated';
+      const estBadge = isEst ? ' <span style="color:#64748b;font-size:10px">(est)</span>' : '';
+      const estOut = t.estimated_out ? `<br><span style="color:#64748b;font-size:10px">~${fmtK(t.estimated_out)} est</span>` : '';
+      const callsCell = isEst ? '<span style="color:#64748b">--</span>' : t.calls;
+      const inCell = isEst ? '<span style="color:#64748b">--</span>' : fmtK(t.tokens_in);
+      const outCell = isEst ? `~${fmtK(t.estimated_out)}` : fmtK(t.tokens_out) + estOut;
+      const totalCell = isEst ? `~${fmtK(t.estimated_out)}` : fmtK(t.tokens_total);
+      const avgCell = isEst ? `~${fmtK(t.estimated_out)}` : fmtK(t.tokens_avg);
+      return `<tr${isEst ? ' style="opacity:0.7"' : ''}>
+        <td class="tn">${t.name}${estBadge}</td>
+        <td class="num">${callsCell}</td>
+        <td class="num">${inCell}</td>
+        <td class="num">${outCell}</td>
+        <td class="num">${totalCell}</td>
+        <td class="num">${avgCell}</td>
       </tr>`;
     }).join('');
     tDiv.innerHTML = `<table class="tool-table">
