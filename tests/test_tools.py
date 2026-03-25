@@ -157,8 +157,8 @@ def test_functions_graph_callers_are_indices(graph):
 def test_hotspots_default_threshold(graph):
     result = _tool_hotspots(graph, {})
     assert "hotspots" in result
-    assert result["min_callers"] == 5
-    # Our test fixture has small functions, likely 0 results at threshold 5
+    assert result["min_callers"] == 10
+    # Our test fixture has small functions, likely 0 results at threshold 10
     assert isinstance(result["count"], int)
 
 
