@@ -40,6 +40,7 @@ class FileNode(BaseModel):
     function_ids: list[str]
     lines_of_code: int = 0
     zone: str | None = None
+    recent_commits: list[dict] = []  # [{sha, author, date, message}]
 
 
 class CallEdge(BaseModel):
