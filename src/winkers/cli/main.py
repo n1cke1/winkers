@@ -390,11 +390,18 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
     if hook_exists:
         click.echo("  [ok] SessionEnd hook already installed.")
     else:
+        # Use cmd /c on Windows: bash shell mangles backslash paths
+        import sys
+        if sys.platform == "win32":
+            hook_cmd = f'cmd /c "{winkers_bin} record --hook"'
+        else:
+            hook_cmd = f"{winkers_bin} record --hook"
+
         session_end.append({
             "matcher": "",
             "hooks": [{
                 "type": "command",
-                "command": f"{winkers_bin} record --hook",
+                "command": hook_cmd,
                 "timeout": 60,
             }],
         })
