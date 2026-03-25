@@ -56,7 +56,7 @@ def register_tools(
             Tool(
                 name="hotspots",
                 description=(
-                    "Critical dependency graph: functions with 5+ callers and"
+                    "Critical dependency graph: functions with 10+ callers and"
                     " WHO calls them. These are high-impact functions —"
                     " changing their signature or behavior affects many callers."
                     " ALWAYS check this before modifying a frequently-called function."
@@ -68,7 +68,7 @@ def register_tools(
                     "properties": {
                         "min_callers": {
                             "type": "integer",
-                            "description": "Minimum callers threshold (default: 5)",
+                            "description": "Minimum callers threshold (default: 10)",
                         },
                     },
                 },
@@ -249,7 +249,7 @@ def _tool_functions_graph(graph: Graph) -> dict:
 
 def _tool_hotspots(graph: Graph, args: dict) -> dict:
     """Functions with many callers + who calls them."""
-    min_callers = args.get("min_callers", 5)
+    min_callers = args.get("min_callers", 10)
 
     hotspots = []
     for fn_id, fn in graph.functions.items():
