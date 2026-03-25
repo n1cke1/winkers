@@ -93,25 +93,120 @@ def _preview(graph, fn_id: str) -> dict[str, Any]:
 
 
 def _history(root: Path) -> list[dict]:
-    """Return list of snapshots from .winkers/history/."""
+    """Return snapshots with diffs and git commits between them."""
     history_dir = root / ".winkers" / "history"
     if not history_dir.exists():
         return []
-    snapshots = []
-    for path in sorted(history_dir.glob("*.json"), reverse=True):
+
+    # Load all snapshots chronologically
+    paths = sorted(history_dir.glob("*.json"))
+    snapshots: list[dict] = []
+    prev_data: dict | None = None
+
+    for path in paths:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            fns = len(data.get("functions", {}))
-            edges = len(data.get("call_edges", []))
-            snapshots.append({
-                "file": path.name,
-                "timestamp": path.stem.replace("T", " ").replace("-", ":", 2),
-                "functions": fns,
-                "call_edges": edges,
-            })
         except Exception:
-            pass
+            continue
+
+        fns = data.get("functions", {})
+        edges = data.get("call_edges", [])
+        files = data.get("files", {})
+        fn_count = len(fns)
+        edge_count = len(edges)
+        file_count = len(files)
+        total_complexity = sum(
+            f.get("complexity", 0) for f in fns.values()
+        )
+
+        entry: dict[str, Any] = {
+            "file": path.name,
+            "timestamp": path.stem.replace("T", " ").replace("-", ":", 2),
+            "functions": fn_count,
+            "call_edges": edge_count,
+            "files": file_count,
+            "complexity": total_complexity,
+        }
+
+        # Diff with previous snapshot
+        if prev_data is not None:
+            prev_fns = prev_data.get("functions", {})
+            prev_edges = prev_data.get("call_edges", [])
+            prev_files = prev_data.get("files", {})
+            prev_cx = sum(
+                f.get("complexity", 0) for f in prev_fns.values()
+            )
+
+            added_fns = [f for f in fns if f not in prev_fns]
+            removed_fns = [f for f in prev_fns if f not in fns]
+            added_files = [f for f in files if f not in prev_files]
+            removed_files = [f for f in prev_files if f not in files]
+
+            entry["diff"] = {
+                "functions_delta": fn_count - len(prev_fns),
+                "edges_delta": edge_count - len(prev_edges),
+                "files_delta": file_count - len(prev_files),
+                "complexity_delta": total_complexity - prev_cx,
+                "added_functions": added_fns[:10],
+                "removed_functions": removed_fns[:10],
+                "added_files": added_files,
+                "removed_files": removed_files,
+            }
+
+        prev_data = data
+        snapshots.append(entry)
+
+    # Add git commits between snapshots
+    _enrich_with_git_commits(root, snapshots)
+
+    # Return newest first
+    snapshots.reverse()
     return snapshots
+
+
+def _enrich_with_git_commits(root: Path, snapshots: list[dict]) -> None:
+    """Add git commits between consecutive snapshots."""
+    import subprocess
+    import sys
+
+    try:
+        kwargs: dict[str, Any] = {
+            "capture_output": True, "text": True,
+            "cwd": str(root), "timeout": 10,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(
+            ["git", "log", "-50", "--pretty=format:%H|%ad|%s",
+             "--date=iso-strict"],
+            **kwargs,
+        )
+    except Exception:
+        return
+
+    if result.returncode != 0:
+        return
+
+    commits = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            commits.append({
+                "sha": parts[0][:8],
+                "date": parts[1],
+                "message": parts[2],
+            })
+
+    for i, snap in enumerate(snapshots):
+        ts = snap["timestamp"].replace(" ", "T").replace(":", "-", 2)
+        next_ts = snapshots[i + 1]["timestamp"].replace(
+            " ", "T"
+        ).replace(":", "-", 2) if i + 1 < len(snapshots) else "9999"
+
+        snap["commits"] = [
+            c for c in commits
+            if ts <= c["date"].replace(":", "-", 2) < next_ts
+        ][:10]
 
 
 def create_app(root: Path) -> web.Application:

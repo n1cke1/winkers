@@ -157,6 +157,9 @@ def _collect_git_history(root: Path, graph) -> None:
         click.echo(f"  [ok] Git history: {count} files with commits")
 
 
+MAX_SNAPSHOTS = 20
+
+
 def _save_history_snapshot(root: Path, graph) -> None:
     """Save a timestamped copy of graph.json to .winkers/history/."""
     from datetime import datetime
@@ -170,7 +173,16 @@ def _save_history_snapshot(root: Path, graph) -> None:
         graph.model_dump_json(indent=2, exclude_defaults=True),
         encoding="utf-8",
     )
-    click.echo(f"  [ok] History snapshot: {snapshot_path.name}")
+
+    # Cleanup: keep only latest MAX_SNAPSHOTS
+    snapshots = sorted(history_dir.glob("*.json"))
+    if len(snapshots) > MAX_SNAPSHOTS:
+        for old in snapshots[:-MAX_SNAPSHOTS]:
+            old.unlink()
+        removed = len(snapshots) - MAX_SNAPSHOTS
+        click.echo(f"  [ok] History snapshot: {snapshot_path.name} ({removed} old removed)")
+    else:
+        click.echo(f"  [ok] History snapshot: {snapshot_path.name}")
 
 
 def _load_dotenv(root: Path) -> None:
