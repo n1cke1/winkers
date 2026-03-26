@@ -110,10 +110,25 @@
 
   /* Agent Learning page */
   #learning-page { flex: 1; overflow-y: auto; padding: 20px; }
-  .session-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
-  .session-card .sc-title { font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
-  .session-card .sc-meta { font-size: 12px; color: #64748b; margin-bottom: 4px; }
-  .session-card .sc-score { font-size: 12px; font-weight: 700; }
+  .session-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
+  .session-card:hover { border-color: #4a5180; }
+  .session-card .sc-title { font-size: 14px; font-weight: 600; color: #e2e8f0; margin-bottom: 8px; }
+  .session-card .sc-turns { display: flex; gap: 10px; font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+  .session-card .sc-turns span { background: #252836; padding: 2px 8px; border-radius: 4px; }
+  .session-card .sc-turns .t-explore { color: #60a5fa; }
+  .session-card .sc-turns .t-modify { color: #f59e0b; }
+  .session-card .sc-turns .t-verify { color: #34d399; }
+  .session-card .sc-mcp { font-size: 11px; color: #7c86b8; margin-bottom: 6px; }
+  .session-card .sc-mcp .t-mcp { background: #1e293b; border: 1px solid #7c3aed; color: #a78bfa; padding: 1px 7px; border-radius: 4px; display: inline-block; margin: 0 3px 2px 0; }
+  .session-card .sc-meta { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+  .session-card .sc-debt { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+  .session-card .sc-score { font-size: 13px; font-weight: 700; margin-top: 6px; }
+  .session-card .sc-tools { display: none; margin-top: 8px; border-top: 1px solid #2d3148; padding-top: 8px; }
+  .session-card.expanded .sc-tools { display: block; }
+  .sc-tool-row { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
+  .sc-tool-name { color: #7dd3fc; min-width: 120px; flex-shrink: 0; }
+  .sc-tool-params { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-tool-err { color: #fca5a5; font-weight: 600; }
   .insight-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
   .insight-card .ic-cat { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
   .insight-card .ic-desc { font-size: 12px; color: #94a3b8; margin: 4px 0; }
@@ -962,6 +977,9 @@ async function loadLearningPage() {
   const insights = insRes.ok ? await insRes.json() : [];
   const toolStats = toolRes.ok ? await toolRes.json() : [];
 
+  // Filter: only committed sessions with a hash
+  sessions = sessions.filter(s => s.commit?.status === 'committed' && s.commit?.hash);
+
   // Savings bar
   const bar = document.getElementById('savings-bar');
   if (insights.length > 0 || sessions.length > 0) {
@@ -1023,15 +1041,41 @@ async function loadLearningPage() {
   if (sessions.length === 0) {
     sList.innerHTML = '<div style="color:#64748b;font-size:13px">No sessions. Run: winkers record</div>';
   } else {
-    sList.innerHTML = sessions.map(s => {
+    sList.innerHTML = sessions.map((s, idx) => {
       const sClass = 'score-' + (s.score_label || 'ok');
       const hash = s.commit?.hash ? s.commit.hash.slice(0,7) : '—';
       const test = s.tests_passed === true ? 'pass' : s.tests_passed === false ? 'fail' : '—';
-      return `<div class="session-card">
-        <div class="sc-title">${s.task_prompt || 'untitled'}</div>
-        <div class="sc-meta">${s.total_turns} turns (${s.exploration_turns}E ${s.modification_turns}M ${s.verification_turns}V) | ${s.model || '?'}</div>
-        <div class="sc-meta">Commit: ${hash} | Tests: ${test} | End: ${s.session_end}</div>
+      const debt = s.debt || {};
+      const cxDelta = debt.complexity_delta != null ? (debt.complexity_delta > 0 ? '+' : '') + debt.complexity_delta : '—';
+      const maxFn = debt.max_function_lines || '—';
+      const filesM = (s.files_modified || []).length;
+      const filesC = (s.files_created || []).length;
+      const title = s.task_prompt || s.commit?.message || 'untitled';
+      const wc = s.winkers_calls || {};
+      const wcKeys = Object.keys(wc);
+      const mcpHtml = wcKeys.length
+        ? wcKeys.map(k => `<span class="t-mcp">${k}\u00d7${wc[k]}</span>`).join(' ')
+        : '<span style="color:#475569">none</span>';
+      const tcs = s.tool_calls || [];
+      const toolRows = tcs.map(tc => {
+        const params = JSON.stringify(tc.input_params || {}).slice(0, 80);
+        const err = tc.is_error ? ' <span class="sc-tool-err">[err]</span>' : '';
+        return `<div class="sc-tool-row"><span class="sc-tool-name">${tc.name}${err}</span><span class="sc-tool-params">${params}</span></div>`;
+      }).join('');
+      return `<div class="session-card" onclick="this.classList.toggle('expanded')">
+        <div class="sc-title">${title}</div>
+        <div class="sc-turns">
+          <span>${s.total_turns || 0} turns</span>
+          <span class="t-explore">E ${s.exploration_turns || 0}</span>
+          <span class="t-modify">M ${s.modification_turns || 0}</span>
+          <span class="t-verify">V ${s.verification_turns || 0}</span>
+          <span>${s.model || '?'}</span>
+        </div>
+        <div class="sc-mcp">MCP: ${mcpHtml}</div>
+        <div class="sc-meta">Commit: ${hash} | Tests: ${test} | Files: ${filesM} modified, ${filesC} created</div>
+        <div class="sc-debt">Complexity: ${cxDelta} | Max fn lines: ${maxFn} | End: ${s.session_end}</div>
         <div class="sc-score ${sClass}">Score: ${(s.score||0).toFixed(2)} (${s.score_label || '?'})</div>
+        <div class="sc-tools">${toolRows || '<div style="color:#475569;font-size:11px">no tool calls recorded</div>'}</div>
       </div>`;
     }).join('');
   }

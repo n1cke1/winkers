@@ -310,6 +310,15 @@ def create_app(root: Path) -> web.Application:
                 "files_created": s.session.files_created,
                 "tests_passed": s.session.tests_passed,
                 "session_end": s.session.session_end,
+                "winkers_calls": s.session.winkers_calls,
+                "tool_calls": [
+                    {
+                        "name": tc.name,
+                        "input_params": tc.input_params,
+                        "is_error": tc.is_error,
+                    }
+                    for tc in s.session.tool_calls
+                ],
                 "score": s.score,
                 "score_label": score_label(s.score),
                 "commit": s.commit.model_dump(),
