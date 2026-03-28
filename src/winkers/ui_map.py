@@ -11,7 +11,7 @@ from winkers.models import Graph
 _TEMPLATE_EXTS = {".html", ".jinja2", ".j2"}
 _IGNORE = {"node_modules", ".venv", "venv", "__pycache__", ".git", "dist", "build"}
 _RENDER_RE = re.compile(r'render_template\(\s*["\']([^"\']+)["\']')
-_PANEL_RE = re.compile(r"panel|modal|section|card", re.IGNORECASE)
+_PANEL_RE = re.compile(r"panel|modal|section|card|pane|wrap|container", re.IGNORECASE)
 
 
 class _ElementCollector(HTMLParser):
@@ -38,7 +38,13 @@ class _ElementCollector(HTMLParser):
         elif tag == "div":
             id_val = attr.get("id", "") or ""
             class_val = attr.get("class", "") or ""
-            if _PANEL_RE.search(id_val) or _PANEL_RE.search(class_val):
+            if "data-tab" in attr:
+                self.elements.append({
+                    "kind": "tab",
+                    "data-tab": attr["data-tab"],
+                    "id": id_val,
+                })
+            elif _PANEL_RE.search(id_val) or _PANEL_RE.search(class_val):
                 self.elements.append({
                     "kind": "panel",
                     "id": id_val,
