@@ -1,4 +1,12 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__winkers__*",
+      "Bash(.venv/Scripts/python -c \":*)",
+      "Bash(gh run:*)",
+      "Bash(gh issue:*)"
+    ]
+  },
   "hooks": {
     "SessionEnd": [
       {
@@ -21,11 +29,6 @@
           }
         ]
       }
-    ]
-  },
-  "permissions": {
-    "allow": [
-      "mcp__winkers__*"
     ]
   }
 }
