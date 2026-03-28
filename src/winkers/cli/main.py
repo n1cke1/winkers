@@ -447,7 +447,11 @@ def _apply_audit(
                 updated += 1
                 break
 
-    remove_ids = {item.id for item in audit.remove}
+    protected = {"manual", "migrated-from-semantic"}
+    remove_ids = {
+        item.id for item in audit.remove
+        if not any(r.id == item.id and r.source in protected for r in rules_file.rules)
+    }
     before = len(rules_file.rules)
     rules_file.rules = [r for r in rules_file.rules if r.id not in remove_ids]
     removed = before - len(rules_file.rules)

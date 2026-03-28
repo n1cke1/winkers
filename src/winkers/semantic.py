@@ -74,7 +74,7 @@ Target: 1-2KB JSON. Every sentence must be actionable.
    - update: rules whose content or wrong_approach is outdated.
      Provide full new text for each changed field.
    - remove: rules where the pattern is gone from the codebase.
-     Almost never remove manual rules (source=manual).
+     Never remove rules with source=manual or source=migrated-from-semantic.
    - Do NOT re-propose rules listed under "User dismissed".
    Omit update/remove if empty.
 
