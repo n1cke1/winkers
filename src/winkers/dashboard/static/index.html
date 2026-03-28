@@ -1330,9 +1330,13 @@ async function loadConventionsPage() {
   const el = document.getElementById('conventions-content');
   el.innerHTML = '<div class="empty-state">Loading…</div>';
   try {
-    const [semRes, conRes] = await Promise.all([fetch('/api/semantic'), fetch('/api/constraints')]);
+    const semRes = await fetch('/api/semantic');
     const sem = await semRes.json();
-    const constraints = await conRes.json();
+    let constraints = [];
+    try {
+      const conRes = await fetch('/api/constraints');
+      if (conRes.ok) constraints = await conRes.json();
+    } catch(_) {}
     let html = '';
 
     if (constraints && constraints.length) {
