@@ -1075,6 +1075,97 @@ def improve(path: str):
     click.echo("To apply: run  winkers init  (includes insights in prompt)")
 
 
+@cli.command("conventions-migrate")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--yes", "-y", is_flag=True, default=False,
+              help="Accept all entries without interactive review.")
+def conventions_migrate(path: str, yes: bool):
+    """Migrate conventions/constraints from old semantic.json to rules.json.
+
+    For projects that ran  winkers init  before v0.7.0, semantic.json may
+    contain  conventions[]  and  constraints[]  fields.  This command reads
+    them and imports them as rules with source 'migrated-from-semantic'.
+
+    Safe to run multiple times — already-imported entries are skipped.
+    """
+    import json as _json
+    from datetime import date
+
+    from winkers.conventions import (
+        ConventionRule,
+        RulesStore,
+        compile_overview,
+    )
+    from winkers.store import STORE_DIR
+
+    root = Path(path).resolve()
+    semantic_path = root / STORE_DIR / "semantic.json"
+
+    if not semantic_path.exists():
+        click.echo("No semantic.json found. Nothing to migrate.")
+        return
+
+    raw = _json.loads(semantic_path.read_text(encoding="utf-8"))
+    entries: list[str] = []
+    for field in ("conventions", "constraints"):
+        val = raw.get(field)
+        if isinstance(val, list):
+            entries.extend(str(v) for v in val if v)
+
+    if not entries:
+        click.echo("semantic.json has no 'conventions' or 'constraints' fields. Nothing to migrate.")
+        return
+
+    click.echo(f"Found {len(entries)} entries in semantic.json to migrate.\n")
+
+    rules_store = RulesStore(root)
+    rules_file = rules_store.load()
+
+    # Skip entries that are already in rules.json (same content)
+    existing_contents = {r.content for r in rules_file.rules}
+    new_entries = [e for e in entries if e not in existing_contents]
+    skipped_existing = len(entries) - len(new_entries)
+    if skipped_existing:
+        click.echo(f"  {skipped_existing} already imported — skipped.\n")
+
+    if not new_entries:
+        click.echo("All entries already in rules.json.")
+        return
+
+    today = date.today().isoformat()
+    accepted = 0
+
+    for idx, content in enumerate(new_entries, 1):
+        click.echo(f"[{idx}/{len(new_entries)}] {content}")
+        if yes:
+            do_accept = True
+        else:
+            choice = click.prompt("  Accept? [y/n]", default="y")
+            do_accept = choice.lower().startswith("y")
+
+        if do_accept:
+            rule = ConventionRule(
+                id=rules_store.next_id(rules_file),
+                category="architecture",
+                title=content[:60].rstrip(),
+                content=content,
+                source="migrated-from-semantic",
+                created=today,
+            )
+            rules_file.rules.append(rule)
+            accepted += 1
+        else:
+            click.echo("  Skipped.")
+
+    if accepted:
+        rules_store.save(rules_file)
+        compile_overview(rules_file, rules_store.overview_path)
+        click.echo(f"\n[ok] Migrated {accepted} rule(s) to .winkers/rules/rules.json")
+        click.echo("     overview.md updated.")
+    else:
+        click.echo("\nNo rules accepted.")
+
+
 @cli.command()
 @click.argument("path", default=".", type=click.Path(exists=True))
 def serve(path: str):

@@ -8,9 +8,8 @@
 - `src/winkers/resolver.py` — CrossFileResolver: raw calls → CallEdges with confidence
 - `src/winkers/store.py` — GraphStore: save/load .winkers/graph.json
 - `src/winkers/semantic.py` — SemanticLayer: Claude API enrichment → .winkers/semantic.json
-- `src/winkers/rules.py` — Violation rules: signature_changed, function_removed, cross_zone_import, circular_dependency, orphan_export
 - `src/winkers/languages/` — language profiles: Python, TypeScript, JavaScript, Java, Go, Rust, C#
-- `src/winkers/mcp/` — MCP server (tools: map, scope, inspect) + auto-rebuild on file changes
+- `src/winkers/mcp/` — MCP server (tools: map, functions_graph, hotspots, scope, routes) + auto-rebuild on file changes
 - `src/winkers/dashboard/` — aiohttp + Cytoscape.js browser dashboard
 - `src/winkers/cli/` — CLI (click): init, serve, dashboard
 
@@ -44,15 +43,18 @@ Zero duplication. Graph = facts. Semantic = meaning.
 ## Semantic schema
 
 - `ZoneIntent` — why zone exists + wrong_approach
-- `Constraint` — id, name, why, severity (critical/important), affects (specific files)
-- `Convention` — rule, wrong_approach
 - `MonsterFile` — sections (prefix, purpose, count) + where_to_add
-- `SemanticLayer` — data_flow, domain_context, zone_intents, monster_files, constraints, conventions, new_feature_checklist
+- `SemanticLayer` — data_flow, domain_context, zone_intents, monster_files, new_feature_checklist
+- `proposed_rules` — returned by SemanticEnricher but NOT saved to semantic.json → goes to rules.json after user confirmation
 
-## MCP integration
+`conventions[]` and `constraints[]` are removed — replaced by rules.json.
 
-- `map(detail=zones)` merges zone_intents from semantic.json if present
-- `scope(function=X)` adds related_constraints from semantic.json if present
+## MCP tools (4 total)
+
+- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "all"
+- `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes
+- `convention_read(target)` — zone / file / "data_flow" / "domain_context" / "checklist"
+- `rule_read(category)` — full rule + wrong_approach + related categories
 
 ## Test fixtures
 
