@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,7 @@ import click
 if TYPE_CHECKING:
     from winkers.conventions import RulesAudit, RulesFile, RulesStore
 
+from winkers import __version__
 from winkers.graph import GraphBuilder
 from winkers.resolver import CrossFileResolver
 from winkers.store import GraphStore
@@ -589,17 +592,35 @@ WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
 
 
 def _install_claude_md_snippet(root: Path) -> None:
-    """Append Winkers MCP usage instructions to CLAUDE.md if not present."""
+    """Append (or update) Winkers MCP usage instructions in CLAUDE.md."""
     claude_md = root / "CLAUDE.md"
     snippet = (_templates_dir() / "claude_code" / "claude_md_snippet.md").read_text(
         encoding="utf-8"
     )
     marker = "## Architectural context (Winkers)"
+    version_pattern = re.compile(r"<!-- winkers-snippet-version: ([\d.]+) -->")
 
     if claude_md.exists():
         existing = claude_md.read_text(encoding="utf-8")
         if marker in existing:
-            click.echo("  [ok] CLAUDE.md already has Winkers section.")
+            m = version_pattern.search(existing)
+            if m and m.group(1) == __version__:
+                click.echo("  [ok] CLAUDE.md Winkers section is up to date.")
+                return
+            # Replace the old snippet block with the new one
+            start = existing.index(marker)
+            # version comment sits on the line before the marker
+            comment_start = existing.rfind("\n", 0, start)
+            block_start = (comment_start + 1) if comment_start != -1 else start
+            rest = existing[start + len(marker):]
+            next_heading = re.search(r"\n## ", rest)
+            if next_heading:
+                end = start + len(marker) + next_heading.start()
+                updated = existing[:block_start] + snippet + "\n" + existing[end + 1:]
+            else:
+                updated = existing[:block_start] + snippet
+            claude_md.write_text(updated.rstrip() + "\n", encoding="utf-8")
+            click.echo(f"  [ok] Updated Winkers section in CLAUDE.md to v{__version__}.")
             return
         claude_md.write_text(
             existing.rstrip() + "\n\n" + snippet, encoding="utf-8"
@@ -631,27 +652,7 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
     # Use forward slashes: Claude Code hooks run in Git Bash on Windows
     hook_bin = winkers_bin.replace("\\", "/")
 
-    # --- record hook ---
-    record_exists = any(
-        "record" in hook.get("command", "")
-        for entry in session_end
-        for hook in entry.get("hooks", [])
-    )
-    if record_exists:
-        click.echo("  [ok] SessionEnd record hook already installed.")
-    else:
-        session_end.append({
-            "matcher": "",
-            "hooks": [{
-                "type": "command",
-                "command": f"{hook_bin} record --hook",
-                "timeout": 60,
-            }],
-        })
-        click.echo("  [ok] SessionEnd record hook installed.")
-        changed = True
-
-    # --- autocommit hook ---
+    # --- autocommit hook (must run before record so bind_to_commit finds the commit) ---
     autocommit_cmd = (
         "git add -A && git diff --cached --quiet"
         " || git commit -m 'wip: auto-commit from Claude session'"
@@ -674,6 +675,26 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
             }],
         })
         click.echo("  [ok] SessionEnd autocommit hook installed.")
+        changed = True
+
+    # --- record hook ---
+    record_exists = any(
+        "record" in hook.get("command", "")
+        for entry in session_end
+        for hook in entry.get("hooks", [])
+    )
+    if record_exists:
+        click.echo("  [ok] SessionEnd record hook already installed.")
+    else:
+        session_end.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": f"{hook_bin} record --hook",
+                "timeout": 60,
+            }],
+        })
+        click.echo("  [ok] SessionEnd record hook installed.")
         changed = True
 
     # --- Tool permissions ---

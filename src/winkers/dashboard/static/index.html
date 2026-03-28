@@ -1143,7 +1143,7 @@ async function loadLearningPage() {
   const [sessRes, insRes, toolRes] = await Promise.all([
     fetch('/api/sessions'), fetch('/api/insights'), fetch('/api/tool-stats')
   ]);
-  const sessions = sessRes.ok ? await sessRes.json() : [];
+  let sessions = sessRes.ok ? await sessRes.json() : [];
   const insights = insRes.ok ? await insRes.json() : [];
   const toolStats = toolRes.ok ? await toolRes.json() : [];
 

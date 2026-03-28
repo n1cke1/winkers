@@ -1,3 +1,4 @@
+<!-- winkers-snippet-version: 0.7.3 -->
 ## Architectural context (Winkers)
 
 This project uses [Winkers](https://github.com/nicholasgasior/winkers) for
@@ -5,9 +6,9 @@ function-level dependency tracking. MCP server `winkers` is connected.
 
 ### Before modifying code
 
-1. `map()` — project constraints, conventions, zones, hotspots. **Call first.**
-2. `scope(file="<path>")` — locked/free functions, callers, constraints for that file.
-3. `hotspots()` — functions with many callers; changing them is high-impact.
+1. `orient(["map","conventions"])` — project structure, zones, hotspots, data flow, zone intents. **Call first.**
+2. `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
+3. `orient(["rules_list"])` — available coding rule categories; then `rule_read("<category>")` for details.
 
 ### After modifying code
 
@@ -21,5 +22,7 @@ function-level dependency tracking. MCP server `winkers` is connected.
 
 ### Other tools
 
-- `functions_graph()` — full indexed function list with caller counts.
-- `routes()` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
+- `orient(["functions_graph"])` — full indexed function list with caller counts.
+- `orient(["routes"])` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
+- `orient(["hotspots"])` — functions with many callers; high-impact changes.
+- `convention_read("<zone>")` — zone intent details (e.g. "app.py", "data_flow", "checklist").
