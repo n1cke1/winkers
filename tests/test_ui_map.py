@@ -2,10 +2,8 @@
 
 from pathlib import Path
 
-import pytest
-
 from winkers.graph import GraphBuilder
-from winkers.ui_map import link_templates, scan_templates
+from winkers.ui_map import scan_templates
 
 FLASK_FIXTURE = Path(__file__).parent / "fixtures" / "flask_project"
 

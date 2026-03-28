@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from winkers.dashboard.api import _graph_to_cytoscape, _history, _preview, create_app
+from winkers.dashboard.api import create_app
+from winkers.dashboard.handlers.data import _history
+from winkers.dashboard.handlers.graph import _graph_to_cytoscape, _preview
 from winkers.models import CallEdge, CallSite, FunctionNode, Graph, ImportEdge
 
 FIXTURES = Path(__file__).parent / "fixtures"

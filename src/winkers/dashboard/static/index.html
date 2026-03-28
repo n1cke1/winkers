@@ -118,6 +118,13 @@
   .debt-target { color: #e2e8f0; font-family: monospace; font-size: 11px; }
   .debt-high { }
   .debt-medium { }
+  /* Debt trend chart */
+  .debt-trend { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 14px 14px 10px; margin-bottom: 20px; }
+  .debt-trend h4 { font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+  .debt-trend svg { display: block; }
+  .debt-trend .trend-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: #64748b; }
+  .debt-trend .trend-legend span { display: flex; align-items: center; gap: 4px; }
+  .debt-trend .trend-legend .swatch { width: 12px; height: 3px; border-radius: 2px; }
 
   /* Tab bar */
   #tab-bar { display: flex; border-bottom: 1px solid #2d3148; background: #1a1d27; }
@@ -408,6 +415,7 @@
       </div>
     </div>
     <div id="debt-summary-cards"></div>
+    <div id="debt-trend-chart"></div>
     <div id="debt-charts"></div>
     <div id="debt-items"></div>
   </div>
@@ -1090,7 +1098,7 @@ function applyDebtLayer(data) {
   // Update stats
   const s = data.summary;
   document.getElementById('stats-bar').textContent =
-    `TECH DEBT: ${s.total_issues} issues (${s.by_severity.high || 0} high, ${s.by_severity.medium || 0} medium)`;
+    `TECH DEBT: score ${s.score ?? '?'} | density ${s.density != null ? s.density.toFixed(1) : '?'}/100fn | ${s.total_issues} issues (${s.by_severity.high || 0} high, ${s.by_severity.medium || 0} medium)`;
 }
 
 function clearDebtLayer() {
@@ -1505,6 +1513,88 @@ async function loadDebtTab() {
     debtRawData = await res.json();
   }
   renderDebtTab();
+  renderDebtTrend();
+}
+
+async function renderDebtTrend() {
+  const el = document.getElementById('debt-trend-chart');
+  const res = await fetch('/api/history');
+  if (!res.ok) { el.innerHTML = ''; return; }
+  const history = await res.json();
+  // history is newest-first, reverse to chronological
+  const points = history.slice().reverse().filter(h => h.debt_score != null);
+  if (points.length < 2) {
+    el.innerHTML = '<div class="debt-trend"><h4>Score &amp; Density trend</h4><div style="color:#475569;font-size:12px;padding:10px 0">Not enough snapshots yet (need at least 2)</div></div>';
+    return;
+  }
+
+  const W = 600, H = 160, PAD_L = 40, PAD_R = 10, PAD_T = 10, PAD_B = 30;
+  const gw = W - PAD_L - PAD_R, gh = H - PAD_T - PAD_B;
+
+  const scores = points.map(p => p.debt_score);
+  const densities = points.map(p => p.debt_density);
+  const maxScore = Math.max(...scores, 1);
+  const maxDensity = Math.max(...densities, 1);
+
+  function polyline(values, maxVal, color) {
+    const pts = values.map((v, i) => {
+      const x = PAD_L + (i / (values.length - 1)) * gw;
+      const y = PAD_T + gh - (v / maxVal) * gh;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+
+  function dots(values, maxVal, color) {
+    return values.map((v, i) => {
+      const x = PAD_L + (i / (values.length - 1)) * gw;
+      const y = PAD_T + gh - (v / maxVal) * gh;
+      const ts = points[i].timestamp || '';
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${color}" stroke="#0f1117" stroke-width="1">` +
+        `<title>${ts}\nScore: ${points[i].debt_score}  Density: ${points[i].debt_density}</title></circle>`;
+    }).join('');
+  }
+
+  // Y-axis labels (score)
+  const ySteps = 4;
+  let yLabels = '';
+  let gridLines = '';
+  for (let i = 0; i <= ySteps; i++) {
+    const v = Math.round(maxScore * i / ySteps);
+    const y = PAD_T + gh - (i / ySteps) * gh;
+    yLabels += `<text x="${PAD_L - 6}" y="${y + 3}" text-anchor="end" fill="#475569" font-size="10">${v}</text>`;
+    gridLines += `<line x1="${PAD_L}" y1="${y}" x2="${W - PAD_R}" y2="${y}" stroke="#1e2030" stroke-dasharray="3,3"/>`;
+  }
+
+  // X-axis labels (dates)
+  const labelCount = Math.min(points.length, 6);
+  let xLabels = '';
+  for (let i = 0; i < labelCount; i++) {
+    const idx = Math.round(i * (points.length - 1) / (labelCount - 1));
+    const x = PAD_L + (idx / (points.length - 1)) * gw;
+    const ts = points[idx].timestamp || '';
+    const short = ts.slice(5, 10);  // MM:DD
+    xLabels += `<text x="${x}" y="${H - 4}" text-anchor="middle" fill="#475569" font-size="10">${short}</text>`;
+  }
+
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width:${W}px">
+    ${gridLines}
+    ${polyline(scores, maxScore, '#7c3aed')}
+    ${polyline(densities, maxDensity, '#38bdf8')}
+    ${dots(scores, maxScore, '#7c3aed')}
+    ${dots(densities, maxDensity, '#38bdf8')}
+    ${yLabels}
+    ${xLabels}
+  </svg>`;
+
+  el.innerHTML = `<div class="debt-trend">
+    <h4>Score &amp; Density trend</h4>
+    ${svg}
+    <div class="trend-legend">
+      <span><span class="swatch" style="background:#7c3aed"></span>Score (left axis, max ${maxScore})</span>
+      <span><span class="swatch" style="background:#38bdf8"></span>Density (scaled, max ${maxDensity.toFixed(1)}/100fn)</span>
+    </div>
+  </div>`;
 }
 
 function renderDebtTab() {
@@ -1521,6 +1611,8 @@ function renderDebtTab() {
   // Summary cards
   document.getElementById('debt-summary-cards').innerHTML = `
     <div class="debt-cards">
+      <div class="debt-card"><div class="dc-label">Score</div><div class="dc-value">${sum.score ?? '—'}</div></div>
+      <div class="debt-card"><div class="dc-label">Density</div><div class="dc-value">${sum.density != null ? sum.density.toFixed(1) : '—'}</div></div>
       <div class="debt-card"><div class="dc-label">Total</div><div class="dc-value">${total}</div></div>
       <div class="debt-card dc-high"><div class="dc-label">High</div><div class="dc-value">${bySev.high || 0}</div></div>
       <div class="debt-card dc-medium"><div class="dc-label">Medium</div><div class="dc-value">${bySev.medium || 0}</div></div>
