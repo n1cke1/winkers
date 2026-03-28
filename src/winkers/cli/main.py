@@ -506,13 +506,16 @@ def _run_debt_analysis(root: Path, graph) -> None:
     total = s.get("total_issues", 0)
     high = s.get("by_severity", {}).get("high", 0)
     medium = s.get("by_severity", {}).get("medium", 0)
+    score = s.get("score", 0)
+    density = s.get("density", 0.0)
 
     if total == 0:
         click.echo("  [ok] Tech debt: clean")
     else:
         click.echo(
             f"  Tech debt: {total} issues "
-            f"({high} high, {medium} medium) -> .winkers/debt.json"
+            f"({high} high, {medium} medium) "
+            f"score={score} density={density}/100fn -> .winkers/debt.json"
         )
 
 

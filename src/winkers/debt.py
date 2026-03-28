@@ -54,10 +54,16 @@ def compute_debt(graph: Graph) -> DebtReport:
         by_severity[item.severity] = by_severity.get(item.severity, 0) + 1
         by_category[item.category] = by_category.get(item.category, 0) + 1
 
+    score = by_severity.get("high", 0) * 3 + by_severity.get("medium", 0)
+    fn_count = len(graph.functions) or 1
+    density = round(score / fn_count * 100, 1)
+
     report.summary = {
         "total_issues": len(report.items),
         "by_severity": by_severity,
         "by_category": by_category,
+        "score": score,
+        "density": density,  # debt points per 100 functions
     }
     return report
 
