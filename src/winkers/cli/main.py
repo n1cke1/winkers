@@ -19,7 +19,8 @@ from winkers.store import GraphStore
 
 @click.group()
 @click.version_option(version=__import__("winkers").__version__)
-def cli():
+@click.pass_context
+def cli(ctx: click.Context):
     """Winkers -- architectural context layer for AI coding agents.
 
     \b
@@ -46,6 +47,21 @@ def cli():
     \b
     Without the hook, run  winkers record  manually to catch up.
     """
+
+
+@cli.result_callback()
+def _after_command(*_args, **_kwargs):
+    """Print update notice if a newer version is available on PyPI."""
+    import winkers
+    from winkers.version_check import newer_version_available
+
+    latest = newer_version_available(winkers.__version__)
+    if latest:
+        click.echo(
+            f"\n  Update available: {winkers.__version__} → {latest}\n"
+            f"  Run: pip install --upgrade winkers",
+            err=True,
+        )
 
 
 @cli.command()
