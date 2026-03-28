@@ -86,6 +86,36 @@ def scan_templates(root: Path) -> dict[str, list[dict]]:
     return result
 
 
+def _find_elements(tpl_name: str, source_file: str, template_map: dict[str, list[dict]]) -> list[dict]:
+    """Find template elements by searching for the closest match to tpl_name."""
+    # 1. Exact match
+    if tpl_name in template_map:
+        return template_map[tpl_name]
+    # 2. With "templates/" prefix
+    if f"templates/{tpl_name}" in template_map:
+        return template_map[f"templates/{tpl_name}"]
+    # 3. Find all keys ending with the template name, pick closest to source file
+    suffix = f"/{tpl_name}"
+    candidates = [k for k in template_map if k.endswith(suffix)]
+    if not candidates:
+        return []
+    if len(candidates) == 1:
+        return template_map[candidates[0]]
+    # Pick the candidate sharing the longest common prefix with source_file
+    source_dir = source_file.rsplit("/", 1)[0] if "/" in source_file else ""
+    best = max(candidates, key=lambda k: len(_common_prefix(k, source_dir)))
+    return template_map[best]
+
+
+def _common_prefix(a: str, b: str) -> str:
+    result = []
+    for ca, cb in zip(a, b):
+        if ca != cb:
+            break
+        result.append(ca)
+    return "".join(result)
+
+
 def link_templates(graph: Graph, root: Path, template_map: dict[str, list[dict]]) -> None:
     """Link route handlers to templates and store ui_map in graph.meta."""
     ui_map: dict[str, dict] = {}
@@ -107,8 +137,7 @@ def link_templates(graph: Graph, root: Path, template_map: dict[str, list[dict]]
         tpl_name = m.group(1)
         fn.template = tpl_name
 
-        # Find elements: try exact match, then with "templates/" prefix
-        elements = template_map.get(tpl_name) or template_map.get(f"templates/{tpl_name}", [])
+        elements = _find_elements(tpl_name, fn.file, template_map)
 
         ui_map[fn.route] = {
             "handler": fn.name,
