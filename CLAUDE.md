@@ -8,6 +8,7 @@
 - `src/winkers/resolver.py` — CrossFileResolver: raw calls → CallEdges with confidence
 - `src/winkers/store.py` — GraphStore: save/load .winkers/graph.json
 - `src/winkers/semantic.py` — SemanticLayer: Claude API enrichment → .winkers/semantic.json
+- `src/winkers/ui_map.py` — UIMap: scan HTML/Jinja2 templates → link Flask routes to UI elements (panels, tables, forms)
 - `src/winkers/languages/` — language profiles: Python, TypeScript, JavaScript, Java, Go, Rust, C#
 - `src/winkers/mcp/` — MCP server (tools: orient, scope, convention_read, rule_read) + auto-rebuild on file changes
 - `src/winkers/dashboard/` — aiohttp + Cytoscape.js browser dashboard
@@ -55,7 +56,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 ## MCP tools (4 total)
 
-- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes"
+- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "ui_map"
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
 - `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
@@ -65,3 +66,4 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/python_project/` — modules/pricing.py, modules/inventory.py, api/prices.py, models.py
 - `tests/fixtures/typescript_project/` — src/pricing.ts, src/inventory.ts, src/api/prices.ts
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
+- `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
