@@ -178,6 +178,15 @@
   .conv-checklist { list-style: none; }
   .conv-checklist li { font-size: 12px; color: #94a3b8; padding: 3px 0; border-bottom: 1px solid #1a1d27; }
   .conv-checklist li::before { content: "→ "; color: #a78bfa; }
+  .constraint-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 1px solid #1a1d27; }
+  .constraint-item span { flex: 1; font-size: 12px; color: #94a3b8; line-height: 1.5; }
+  .constraint-item span::before { content: "⚠ "; color: #f59e0b; }
+  .btn-del-constraint { background: none; border: none; color: #475569; font-size: 14px; cursor: pointer; padding: 0 4px; line-height: 1; }
+  .btn-del-constraint:hover { color: #ef4444; }
+  .add-constraint-form { background: #1a1d27; border: 1px solid #4f46e5; border-radius: 8px; padding: 14px; margin-top: 10px; display: none; }
+  .add-constraint-form textarea { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; font-size: 13px; padding: 7px 10px; font-family: inherit; resize: vertical; min-height: 60px; box-sizing: border-box; }
+  .add-constraint-form textarea:focus { outline: none; border-color: #4f46e5; }
+  .add-constraint-form .form-actions { margin-top: 8px; display: flex; gap: 8px; }
   .empty-state { color: #475569; font-size: 13px; padding: 20px 0; text-align: center; }
 
   /* Tool stats table */
@@ -329,6 +338,16 @@
   <div id="conventions-page">
     <div class="rules-header">
       <h2>Conventions</h2>
+      <button class="btn-add" id="add-constraint-btn">+ Add Constraint</button>
+    </div>
+    <div class="add-constraint-form" id="add-constraint-form">
+      <div class="form-row"><label>External constraint or project context</label>
+        <textarea id="constraint-text" placeholder="e.g. No external API calls — all data must come from internal services only"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn-add" id="constraint-save-btn">Save</button>
+        <button id="constraint-cancel-btn">Cancel</button>
+      </div>
     </div>
     <div id="conventions-content"></div>
   </div>
@@ -1217,7 +1236,7 @@ async function dismissRule(id) {
 
 document.getElementById('add-rule-btn').addEventListener('click', () => {
   const form = document.getElementById('add-rule-form');
-  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  form.style.display = form.style.display === 'block' ? 'none' : 'block';
 });
 
 document.getElementById('rule-cancel-btn').addEventListener('click', () => {
@@ -1251,13 +1270,26 @@ async function loadConventionsPage() {
   const el = document.getElementById('conventions-content');
   el.innerHTML = '<div class="empty-state">Loading…</div>';
   try {
-    const res = await fetch('/api/semantic');
-    const sem = await res.json();
+    const [semRes, conRes] = await Promise.all([fetch('/api/semantic'), fetch('/api/constraints')]);
+    const sem = await semRes.json();
+    const constraints = await conRes.json();
+    let html = '';
+
+    if (constraints && constraints.length) {
+      const items = constraints.map((c, i) =>
+        `<div class="constraint-item">
+          <span>${escHtml(c)}</span>
+          <button class="btn-del-constraint" onclick="deleteConstraint(${i})" title="Remove">✕</button>
+        </div>`
+      ).join('');
+      html += `<div class="conv-section"><h3>Project Constraints</h3>${items}</div>`;
+    }
+
     if (!sem || !Object.keys(sem).length) {
-      el.innerHTML = '<div class="empty-state">No conventions yet. Run winkers init to generate.</div>';
+      if (!html) el.innerHTML = '<div class="empty-state">No conventions yet. Run winkers init to generate.</div>';
+      else el.innerHTML = html;
       return;
     }
-    let html = '';
     if (sem.data_flow) {
       html += `<div class="conv-section"><h3>Data Flow</h3><div class="conv-text">${escHtml(sem.data_flow)}</div></div>`;
     }
@@ -1283,6 +1315,40 @@ async function loadConventionsPage() {
     el.innerHTML = '<div class="empty-state">Failed to load conventions.</div>';
   }
 }
+
+async function deleteConstraint(idx) {
+  if (!confirm('Remove this constraint?')) return;
+  try {
+    await fetch(`/api/constraints/${idx}`, { method: 'DELETE' });
+    loadConventionsPage();
+  } catch(e) {}
+}
+
+document.getElementById('add-constraint-btn').addEventListener('click', () => {
+  const form = document.getElementById('add-constraint-form');
+  form.style.display = form.style.display === 'block' ? 'none' : 'block';
+});
+
+document.getElementById('constraint-cancel-btn').addEventListener('click', () => {
+  document.getElementById('add-constraint-form').style.display = 'none';
+});
+
+document.getElementById('constraint-save-btn').addEventListener('click', async () => {
+  const text = document.getElementById('constraint-text').value.trim();
+  if (!text) { alert('Constraint text is required.'); return; }
+  try {
+    const res = await fetch('/api/constraints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (res.ok) {
+      document.getElementById('add-constraint-form').style.display = 'none';
+      document.getElementById('constraint-text').value = '';
+      loadConventionsPage();
+    }
+  } catch(e) {}
+});
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

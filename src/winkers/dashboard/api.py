@@ -461,6 +461,42 @@ def create_app(root: Path) -> web.Application:
         rules_store.save(rules_file)
         return web.json_response(rule.model_dump())
 
+    async def handle_constraints_get(request: web.Request) -> web.Response:
+        from winkers.semantic import SemanticStore
+        layer = SemanticStore(root).load()
+        return web.json_response(layer.constraints if layer else [])
+
+    async def handle_constraints_add(request: web.Request) -> web.Response:
+        from winkers.semantic import SemanticStore
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json"}, status=400)
+        text = data.get("text", "").strip()
+        if not text:
+            return web.json_response({"error": "text required"}, status=400)
+        store = SemanticStore(root)
+        layer = store.load()
+        if layer is None:
+            return web.json_response({"error": "No semantic.json. Run winkers init."}, status=404)
+        layer.constraints.append(text)
+        store.save(layer)
+        return web.json_response({"ok": True, "constraints": layer.constraints})
+
+    async def handle_constraints_delete(request: web.Request) -> web.Response:
+        from winkers.semantic import SemanticStore
+        try:
+            idx = int(request.match_info["idx"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "invalid index"}, status=400)
+        store = SemanticStore(root)
+        layer = store.load()
+        if layer is None or idx < 0 or idx >= len(layer.constraints):
+            return web.json_response({"error": "not found"}, status=404)
+        layer.constraints.pop(idx)
+        store.save(layer)
+        return web.json_response({"ok": True, "constraints": layer.constraints})
+
     async def handle_snapshot_graph(request: web.Request) -> web.Response:
         """Load a historical snapshot as Cytoscape graph."""
         filename = request.rel_url.query.get("file", "")
@@ -496,6 +532,9 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/rules", handle_rules)
     app.router.add_delete("/api/rules/{id}", handle_rules_dismiss)
     app.router.add_post("/api/rules", handle_rules_add)
+    app.router.add_get("/api/constraints", handle_constraints_get)
+    app.router.add_post("/api/constraints", handle_constraints_add)
+    app.router.add_delete("/api/constraints/{idx}", handle_constraints_delete)
     app.router.add_get("/ws", handle_ws)
     return app
 

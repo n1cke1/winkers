@@ -288,6 +288,8 @@ def _section_conventions(root: Path) -> dict:
                 "where_to_add": m.where_to_add}
             for f, m in semantic.monster_files.items()
         }
+    if semantic.constraints:
+        result["project_constraints"] = semantic.constraints
     if semantic.new_feature_checklist:
         result["before_writing_code"] = semantic.new_feature_checklist
     return result
@@ -443,6 +445,8 @@ def _tool_convention_read(args: dict, root: Path) -> dict:
         return {"domain_context": semantic.domain_context or "Not available."}
     if target == "checklist":
         return {"checklist": semantic.new_feature_checklist}
+    if target == "constraints":
+        return {"constraints": semantic.constraints}
 
     # Zone name
     if target in semantic.zone_intents:
@@ -466,7 +470,7 @@ def _tool_convention_read(args: dict, root: Path) -> dict:
         "error": f"Target '{target}' not found.",
         "available_zones": list(semantic.zone_intents.keys()),
         "available_files": list(semantic.monster_files.keys()),
-        "aspects": ["data_flow", "domain_context", "checklist"],
+        "aspects": ["data_flow", "domain_context", "checklist", "constraints"],
     }
 
 

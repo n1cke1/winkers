@@ -300,6 +300,9 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
         click.echo(f"  Semantic enrichment failed: {e}")
         return
 
+    # Preserve user-defined constraints — never overwritten by AI
+    if existing:
+        result.layer.constraints = existing.constraints
     sem_store.save(result.layer)
     tokens = result.layer.meta.get("input_tokens", 0) + result.layer.meta.get("output_tokens", 0)
     secs = result.layer.meta.get("duration_s", 0)

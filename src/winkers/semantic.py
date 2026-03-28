@@ -116,6 +116,7 @@ class SemanticLayer(BaseModel):
     zone_intents: dict[str, ZoneIntent] = {}
     monster_files: dict[str, MonsterFile] = {}
     new_feature_checklist: list[str] = []
+    constraints: list[str] = []  # user-defined external constraints, never overwritten by init
     meta: dict[str, Any] = {}
 
 
