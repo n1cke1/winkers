@@ -238,11 +238,7 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
     click.echo(f"  API key found: {api_key[:12]}...")
 
     try:
-        from winkers.semantic import (
-            SemanticEnricher,
-            SemanticStore,
-            build_insights_prompt,
-        )
+        from winkers.semantic import SemanticEnricher, SemanticStore
     except ImportError:
         click.echo(
             "  Skipping semantic: 'anthropic' not installed. "
@@ -271,15 +267,9 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
         click.echo(f"  Skipping semantic: {e}")
         return
 
-    insights_text = build_insights_prompt(root)
-    has_new_insights = bool(insights_text)
-
-    if existing and not enricher.is_stale(graph, root, existing) and not has_new_insights:
+    if existing and not enricher.is_stale(graph, root, existing):
         click.echo("  Semantic data up to date, skipping API call.")
         return
-
-    if has_new_insights:
-        click.echo("  Including insights from past agent sessions.")
 
     click.echo("  Running pattern detectors ...")
     evidence = run_all_detectors(root)
@@ -291,7 +281,6 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
     try:
         result = enricher.enrich(
             graph, root,
-            insights_text=insights_text,
             existing_rules=rules_file.rules,
             detector_evidence=evidence,
             dismissed=dismissed,
@@ -715,9 +704,7 @@ def _install_generic(root: Path) -> None:
               help="Path to transcript.jsonl file.")
 @click.option("--hook", is_flag=True, default=False,
               help="Read Claude Code hook JSON from stdin (SessionEnd).")
-@click.option("--catch-up", "catch_up", is_flag=True, default=False,
-              help="Find and record all unrecorded sessions.")
-def record(path: str, transcript: str | None, hook: bool, catch_up: bool):
+def record(path: str, transcript: str | None, hook: bool):
     """Record an agent session for learning.
 
     Parses Claude Code transcript, binds to git commit, computes
@@ -726,10 +713,9 @@ def record(path: str, transcript: str | None, hook: bool, catch_up: bool):
 
     \b
     Modes:
-      winkers record                  Default: catch-up (find unrecorded sessions)
+      winkers record                  Find and record all unrecorded sessions
       winkers record --hook           Called by Claude Code SessionEnd hook (stdin)
       winkers record --transcript F   Record a specific transcript.jsonl file
-      winkers record --catch-up       Explicit catch-up scan
 
     \b
     Automatic recording requires a Claude Code hook (not active by default):
@@ -744,10 +730,7 @@ def record(path: str, transcript: str | None, hook: bool, catch_up: bool):
         from winkers.session_store import SessionStore
         _record_one(root, Path(transcript))
         _update_rule_stats(root, SessionStore(root))
-    elif catch_up:
-        _record_catch_up(root)
     else:
-        # Default: catch-up
         _record_catch_up(root)
 
 
@@ -918,206 +901,6 @@ def _record_catch_up(root: Path) -> None:
     else:
         click.echo(f"Recorded {new_count} new session(s).")
         _update_rule_stats(root, store)
-
-
-@cli.command()
-@click.argument("path", default=".", type=click.Path(exists=True))
-@click.option("--all", "analyze_all", is_flag=True, default=False,
-              help="Analyze all unanalyzed sessions.")
-def analyze(path: str, analyze_all: bool):
-    """Analyze recorded sessions to find knowledge gaps.
-
-    Sends session trace + semantic.json to Haiku (~$0.01/session).
-    Results accumulate in .winkers/insights.json.
-
-    \b
-    Requires ANTHROPIC_API_KEY.
-    """
-    root = Path(path).resolve()
-    _load_dotenv(root)
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        click.echo(
-            "Error: ANTHROPIC_API_KEY not set. "
-            "Required for session analysis.",
-            err=True,
-        )
-        return
-
-    from winkers.insights_store import InsightsStore
-    from winkers.session_store import SessionStore
-
-    session_store = SessionStore(root)
-    insights_store = InsightsStore(root)
-    sessions = session_store.load_all()
-
-    if not sessions:
-        click.echo("No recorded sessions. Run: winkers record")
-        return
-
-    # Filter to unanalyzed sessions
-    analyzed_ids = {
-        sid
-        for i in insights_store.load()
-        for sid in i.session_ids
-    }
-
-    if analyze_all:
-        targets = [s for s in sessions if s.session.session_id not in analyzed_ids]
-    else:
-        # Default: latest unanalyzed, or latest overall
-        unanalyzed = [
-            s for s in sessions if s.session.session_id not in analyzed_ids
-        ]
-        targets = unanalyzed[-1:] if unanalyzed else sessions[-1:]
-
-    if not targets:
-        click.echo("All sessions already analyzed.")
-        return
-
-    semantic_json = _load_semantic_json(root)
-
-    for scored in targets:
-        _analyze_one(scored, semantic_json, insights_store, api_key)
-
-    open_count = len(insights_store.open_insights())
-    click.echo(f"  Total open insights: {open_count}")
-
-
-def _load_semantic_json(root: Path) -> str:
-    """Load semantic.json as text, or return empty marker."""
-    sem_path = root / ".winkers" / "semantic.json"
-    if sem_path.exists():
-        return sem_path.read_text(encoding="utf-8")
-    return "{}"
-
-
-def _analyze_one(scored, semantic_json: str, insights_store, api_key: str) -> None:
-    """Analyze a single scored session."""
-    from winkers.analyzer import analyze_session
-
-    sid = scored.session.session_id[:8]
-    task = scored.session.task_prompt[:40]
-    click.echo(f"  Analyzing {sid} ({task}...) ...")
-
-    try:
-        result = analyze_session(scored, semantic_json, api_key=api_key)
-    except RuntimeError as e:
-        click.echo(f"  Error: {e}", err=True)
-        return
-
-    insights_store.merge(result)
-    n = len(result.insights)
-    tokens = result.input_tokens + result.output_tokens
-    click.echo(
-        f"  [ok] {n} insight(s) found "
-        f"({tokens} tokens, {result.duration_s}s)"
-    )
-
-
-@cli.command()
-@click.argument("path", default=".", type=click.Path(exists=True))
-def insights(path: str):
-    """View accumulated knowledge gaps.
-
-    Shows open insights sorted by priority.
-    """
-    root = Path(path).resolve()
-
-    from winkers.insights_store import InsightsStore
-
-    store = InsightsStore(root)
-    items = store.open_insights()
-
-    if not items:
-        click.echo("No open insights.")
-        return
-
-    total_turns = sum(i.turns_wasted for i in items)
-    total_tokens = sum(i.tokens_wasted for i in items)
-
-    click.echo(
-        f"Open insights: {len(items)} "
-        f"({total_turns} turns wasted, ~{total_tokens} tokens)\n"
-    )
-
-    for idx, item in enumerate(items):
-        tag = item.priority.upper()
-        occ = f"x{item.occurrences}" if item.occurrences > 1 else ""
-        click.echo(
-            f"  [{idx}] [{tag}]{occ} {item.category}: "
-            f"{item.description}"
-        )
-        click.echo(
-            f"       -> {item.semantic_target}: "
-            f"{item.injection_content}"
-        )
-        click.echo()
-
-
-@cli.command()
-@click.argument("path", default=".", type=click.Path(exists=True))
-def improve(path: str):
-    """Show what insights will feed into the next semantic enrichment.
-
-    \b
-    Insights come from  winkers analyze  and accumulate in insights.json.
-    High-priority and repeated insights are included in the prompt when
-    you run  winkers init  -- the model weaves them into semantic.json.
-
-    \b
-    This command is read-only. To apply insights, re-run  winkers init.
-    """
-    root = Path(path).resolve()
-
-    from winkers.insights_store import InsightsStore
-
-    store = InsightsStore(root)
-    all_open = store.open_insights()
-
-    if not all_open:
-        click.echo("No open insights. Nothing to improve.")
-        return
-
-    qualifying = [
-        i for i in all_open
-        if i.priority == "high"
-        or (i.priority == "medium" and i.occurrences >= 2)
-    ]
-
-    total_turns = sum(i.turns_wasted for i in all_open)
-    total_tokens = sum(i.tokens_wasted for i in all_open)
-
-    click.echo(
-        f"Insights: {len(all_open)} open, "
-        f"{len(qualifying)} qualify for next init\n"
-        f"Evidence: {total_turns} turns wasted, "
-        f"~{total_tokens} tokens\n"
-    )
-
-    # Show by target
-    by_target: dict[str, list] = {}
-    for item in qualifying:
-        by_target.setdefault(item.semantic_target, []).append(item)
-
-    for target, group in sorted(by_target.items()):
-        click.echo(f"  semantic.json -> {target}:")
-        for item in group:
-            occ = f" ({item.occurrences} sessions)" if item.occurrences > 1 else ""
-            click.echo(f"    + {item.injection_content}{occ}")
-        click.echo()
-
-    # Show non-qualifying
-    pending = [i for i in all_open if i not in qualifying]
-    if pending:
-        click.echo(
-            f"  {len(pending)} more insight(s) pending "
-            f"(need higher priority or more occurrences)"
-        )
-        click.echo()
-
-    click.echo("To apply: run  winkers init  (includes insights in prompt)")
 
 
 @cli.command("conventions-migrate")
