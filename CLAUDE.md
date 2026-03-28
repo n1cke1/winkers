@@ -51,10 +51,10 @@ Zero duplication. Graph = facts. Semantic = meaning.
 
 ## MCP tools (4 total)
 
-- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "all"
+- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes"
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes
-- `convention_read(target)` — zone / file / "data_flow" / "domain_context" / "checklist"
-- `rule_read(category)` — full rule + wrong_approach + related categories
+- `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
+- `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
 
 ## Test fixtures
 

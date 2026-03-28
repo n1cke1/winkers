@@ -315,7 +315,7 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
     if audit.is_empty():
         return
 
-    filtered_audit, dis_adds, dis_removes, dis_updates = _interactive_review(audit, yes)
+    filtered_audit, dis_adds, dis_removes, dis_updates = _interactive_review(audit, rules_file, yes)
 
     if dis_adds or dis_removes or dis_updates:
         dismissed_store.merge(dis_adds, dis_removes, dis_updates)
@@ -328,10 +328,11 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
 
 
 def _interactive_review(
-    audit: RulesAudit, yes: bool
+    audit: RulesAudit, rules_file: RulesFile, yes: bool
 ) -> tuple[RulesAudit, list, list[int], list[int]]:
-    """Show numbered list of proposed rule changes, let user skip items by ID.
+    """Review proposed rule changes one by one.
 
+    Y = accept, n = skip (dismissed), q = accept this and all remaining.
     Returns (filtered_audit, dismissed_adds, dismissed_remove_ids, dismissed_update_ids).
     """
     import sys
@@ -341,46 +342,7 @@ def _interactive_review(
     if yes or not sys.stdout.isatty():
         return audit, [], [], []
 
-    # Build numbered display list
-    items: list[tuple[int, str, object]] = []  # (display_id, section, item)
-    idx = 1
-
-    if audit.add:
-        click.echo("\n  Rules to ADD:")
-        for r in audit.add:
-            click.echo(f"    {idx}. [{r.category}] {r.title} — {r.content[:70]}")
-            items.append((idx, "add", r))
-            idx += 1
-
-    if audit.update:
-        click.echo("\n  Rules to UPDATE:")
-        for r in audit.update:
-            click.echo(f"    {idx}. [#{r.id}] {r.content[:60]}  ({r.reason[:40]})")
-            items.append((idx, "update", r))
-            idx += 1
-
-    if audit.remove:
-        click.echo("\n  Rules to REMOVE:")
-        for r in audit.remove:
-            click.echo(f"    {idx}. [#{r.id}] {r.reason[:70]}")
-            items.append((idx, "remove", r))
-            idx += 1
-
-    raw = click.prompt(
-        "\n  Enter IDs to SKIP (comma-separated), or Enter to accept all",
-        default="",
-        show_default=False,
-    ).strip()
-
-    if not raw:
-        return audit, [], [], []
-
-    try:
-        skip_ids = {int(x.strip()) for x in raw.split(",") if x.strip()}
-    except ValueError:
-        click.echo("  Invalid input — accepting all changes.")
-        return audit, [], [], []
-
+    rules_by_id = {r.id: r for r in rules_file.rules}
     dismissed_adds = []
     dismissed_removes: list[int] = []
     dismissed_updates: list[int] = []
@@ -388,23 +350,83 @@ def _interactive_review(
     selected_update = []
     selected_remove = []
 
-    for display_id, section, item in items:
-        skipped = display_id in skip_ids
-        if section == "add":
-            if skipped:
-                dismissed_adds.append(item)
-            else:
-                selected_add.append(item)
-        elif section == "update":
-            if skipped:
-                dismissed_updates.append(item.id)
-            else:
-                selected_update.append(item)
-        elif section == "remove":
-            if skipped:
-                dismissed_removes.append(item.id)
-            else:
-                selected_remove.append(item)
+    total = len(audit.add) + len(audit.update) + len(audit.remove)
+    click.echo(f"\n  {total} rule change(s) proposed. Review each  (q = accept rest):")
+
+    quit_all = False
+
+    def _ask(prompt_text: str) -> str:
+        return click.prompt(f"  {prompt_text}", default="y", show_default=False).strip().lower()
+
+    def _trunc(s: str, n: int = 200) -> str:
+        return s if len(s) <= n else s[:n] + "…"
+
+    for i, r in enumerate(audit.add, 1):
+        if quit_all:
+            selected_add.append(r)
+            continue
+        click.echo(f"\n  [{i}/{total}] ADD  [{r.category}]  {r.title}")
+        click.echo(f"  content:  {_trunc(r.content)}")
+        if r.wrong_approach:
+            click.echo(f"  avoid:    {_trunc(r.wrong_approach)}")
+        if r.affects:
+            click.echo(f"  affects:  {', '.join(r.affects)}")
+        choice = _ask("Accept? [Y/n/q]")
+        if choice.startswith("q"):
+            quit_all = True
+            selected_add.append(r)
+        elif choice.startswith("n"):
+            dismissed_adds.append(r)
+        else:
+            selected_add.append(r)
+
+    for i, r in enumerate(audit.update, len(audit.add) + 1):
+        if quit_all:
+            selected_update.append(r)
+            continue
+        current = rules_by_id.get(r.id)
+        click.echo(f"\n  [{i}/{total}] UPDATE  rule #{r.id}"
+                   + (f"  [{current.title}]" if current else ""))
+        if current and r.content and r.content != current.content:
+            click.echo(f"  was:      {_trunc(current.content, 120)}")
+            click.echo(f"  now:      {_trunc(r.content, 120)}")
+        elif r.content:
+            click.echo(f"  content:  {_trunc(r.content, 120)}")
+        if current and r.wrong_approach and r.wrong_approach != current.wrong_approach:
+            click.echo(f"  avoid→    {_trunc(r.wrong_approach, 120)}")
+        if r.reason:
+            click.echo(f"  reason:   {_trunc(r.reason, 120)}")
+        choice = _ask("Accept? [Y/n/q]")
+        if choice.startswith("q"):
+            quit_all = True
+            selected_update.append(r)
+        elif choice.startswith("n"):
+            dismissed_updates.append(r.id)
+        else:
+            selected_update.append(r)
+
+    for i, r in enumerate(audit.remove, len(audit.add) + len(audit.update) + 1):
+        if quit_all:
+            selected_remove.append(r)
+            continue
+        current = rules_by_id.get(r.id)
+        click.echo(f"\n  [{i}/{total}] REMOVE  rule #{r.id}")
+        if current:
+            click.echo(f"  title:    {current.title}")
+            click.echo(f"  content:  {_trunc(current.content, 120)}")
+        if r.reason:
+            click.echo(f"  reason:   {_trunc(r.reason, 120)}")
+        choice = _ask("Accept removal? [Y/n/q]")
+        if choice.startswith("q"):
+            quit_all = True
+            selected_remove.append(r)
+        elif choice.startswith("n"):
+            dismissed_removes.append(r.id)
+        else:
+            selected_remove.append(r)
+
+    if quit_all:
+        click.echo("  Accepted all remaining.")
 
     filtered = RulesAudit(add=selected_add, update=selected_update, remove=selected_remove)
     return filtered, dismissed_adds, dismissed_removes, dismissed_updates
@@ -1133,7 +1155,13 @@ def conventions_migrate(path: str, yes: bool):
     for field in ("conventions", "constraints"):
         val = raw.get(field)
         if isinstance(val, list):
-            entries.extend(str(v) for v in val if v)
+            for v in val:
+                if isinstance(v, dict):
+                    text = v.get("content") or v.get("text") or v.get("rule") or ""
+                    if text:
+                        entries.append(str(text))
+                elif v:
+                    entries.append(str(v))
 
     if not entries:
         click.echo(

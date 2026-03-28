@@ -31,7 +31,7 @@ def register_tools(
                     " 'functions_graph' = indexed call graph."
                     " 'hotspots' = high-impact functions."
                     " 'routes' = HTTP endpoints."
-                    " Combine: include=['map','conventions'] or include=['all']."
+                    " Combine: include=['map','conventions']."
                     " Then use convention_read/rule_read for details."
                 ),
                 inputSchema={
@@ -42,7 +42,7 @@ def register_tools(
                             "items": {"type": "string"},
                             "description": (
                                 "What to include: 'map', 'conventions', 'rules_list',"
-                                " 'functions_graph', 'hotspots', 'routes', 'all'"
+                                " 'functions_graph', 'hotspots', 'routes'"
                             ),
                         },
                         "zone": {
@@ -75,8 +75,9 @@ def register_tools(
                 name="convention_read",
                 description=(
                     "Read detailed convention for a zone, file, or aspect."
-                    " target = zone name (e.g. 'api'), file path, or"
-                    " 'data_flow' / 'domain_context' / 'checklist'."
+                    " target = zone name as listed in conventions (e.g. 'app.py', 'old/'),"
+                    " or 'data_flow' / 'domain_context' / 'checklist'."
+                    " Use orient(include=['conventions']) first to see available zone names."
                 ),
                 inputSchema={
                     "type": "object",
@@ -92,10 +93,9 @@ def register_tools(
             Tool(
                 name="rule_read",
                 description=(
-                    "Read the full coding rule for a category."
-                    " Returns rule content, wrong_approach, and related categories."
-                    " Categories: architecture, data, numeric, api, validation,"
-                    " errors, testing, security."
+                    "Read all coding rules for a category."
+                    " Returns list of rules with content, wrong_approach, and related categories."
+                    " Use orient(include=['rules_list']) to see available categories."
                 ),
                 inputSchema={
                     "type": "object",
@@ -167,8 +167,6 @@ def _load_rules(root: Path):
 
 def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     include = args.get("include", [])
-    if "all" in include:
-        include = ["map", "conventions", "rules_list", "functions_graph", "hotspots", "routes"]
 
     zone = args.get("zone")
     min_callers = args.get("min_callers", 10)
@@ -190,7 +188,7 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     if not result:
         result["error"] = (
             "No valid include values. Use: map, conventions, rules_list,"
-            " functions_graph, hotspots, routes, all"
+            " functions_graph, hotspots, routes"
         )
     return result
 
