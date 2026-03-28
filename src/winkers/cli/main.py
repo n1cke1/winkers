@@ -209,6 +209,22 @@ def _save_history_snapshot(root: Path, graph) -> None:
         click.echo(f"  [ok] History snapshot: {snapshot_path.name}")
 
 
+def _backup_file(src: Path, history_dir: Path, prefix: str) -> None:
+    """Copy src to history_dir/<prefix>-<timestamp>.json before overwriting."""
+    import shutil
+    from datetime import datetime
+
+    if not src.exists():
+        return
+    history_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    shutil.copy2(src, history_dir / f"{prefix}-{ts}.json")
+    snapshots = sorted(history_dir.glob(f"{prefix}-*.json"))
+    if len(snapshots) > MAX_SNAPSHOTS:
+        for old in snapshots[:-MAX_SNAPSHOTS]:
+            old.unlink()
+
+
 def _load_dotenv(root: Path) -> None:
     """Load .env file from project root into os.environ."""
     env_file = root / ".env"
@@ -294,6 +310,7 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False, force: bool =
     # Preserve user-defined constraints — never overwritten by AI
     if existing:
         result.layer.constraints = existing.constraints
+    _backup_file(sem_store.semantic_path, root / ".winkers" / "history", "semantic")
     sem_store.save(result.layer)
     tokens = result.layer.meta.get("input_tokens", 0) + result.layer.meta.get("output_tokens", 0)
     secs = result.layer.meta.get("duration_s", 0)
@@ -313,6 +330,7 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False, force: bool =
 
     if not filtered_audit.is_empty():
         added, updated, removed = _apply_audit(rules_file, filtered_audit, rules_store)
+        _backup_file(rules_store.rules_path, root / ".winkers" / "history", "rules")
         rules_store.save(rules_file)
         compile_overview(rules_file, rules_store.overview_path)
         click.echo(f"  [ok] Rules: +{added} added, {updated} updated, {removed} removed")
