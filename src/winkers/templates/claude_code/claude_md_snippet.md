@@ -1,4 +1,4 @@
-<!-- winkers-snippet-version: 0.7.3 -->
+<!-- winkers-snippet-version: 0.7.4 -->
 ## Architectural context (Winkers)
 
 This project uses [Winkers](https://github.com/nicholasgasior/winkers) for

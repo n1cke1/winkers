@@ -33,6 +33,7 @@ class FunctionNode(BaseModel):
     lines: int = 0
     route: str | None = None          # "/api/products"
     http_method: str | None = None    # "GET", "POST", etc.
+    template: str | None = None       # "products/list.html"
 
 
 class FileNode(BaseModel):

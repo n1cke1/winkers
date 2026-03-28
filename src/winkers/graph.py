@@ -42,6 +42,7 @@ class GraphBuilder:
             "total_call_edges": len(graph.call_edges),
             "parse_time_ms": round(elapsed, 1),
         }
+        self._build_ui_map(graph, root)
         return graph
 
     # ------------------------------------------------------------------
@@ -360,3 +361,11 @@ class GraphBuilder:
     def _node_has_async(self, node, parse_result: ParseResult) -> bool:
         text = parse_result.text(node)
         return text.lstrip().startswith("async ")
+
+    def _build_ui_map(self, graph: Graph, root: Path) -> None:
+        """Scan HTML templates and link them to route handlers."""
+        from winkers.ui_map import link_templates, scan_templates
+        if not any(fn.route for fn in graph.functions.values()):
+            return
+        template_map = scan_templates(root)
+        link_templates(graph, root, template_map)

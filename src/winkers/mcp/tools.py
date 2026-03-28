@@ -31,6 +31,7 @@ def register_tools(
                     " 'functions_graph' = indexed call graph."
                     " 'hotspots' = high-impact functions."
                     " 'routes' = HTTP endpoints."
+                    " 'ui_map' = route→template links with UI elements (panels, tables, forms)."
                     " Combine: include=['map','conventions']."
                     " Then use convention_read/rule_read for details."
                 ),
@@ -42,7 +43,7 @@ def register_tools(
                             "items": {"type": "string"},
                             "description": (
                                 "What to include: 'map', 'conventions', 'rules_list',"
-                                " 'functions_graph', 'hotspots', 'routes'"
+                                " 'functions_graph', 'hotspots', 'routes', 'ui_map'"
                             ),
                         },
                         "zone": {
@@ -184,11 +185,13 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
         result["hotspots"] = _section_hotspots(graph, min_callers)
     if "routes" in include:
         result["routes"] = _section_routes(graph, zone)
+    if "ui_map" in include:
+        result["ui_map"] = _section_ui_map(graph, zone)
 
     if not result:
         result["error"] = (
             "No valid include values. Use: map, conventions, rules_list,"
-            " functions_graph, hotspots, routes"
+            " functions_graph, hotspots, routes, ui_map"
         )
     return result
 
@@ -348,18 +351,34 @@ def _section_routes(graph: Graph, zone_filter: str | None) -> dict:
         if zone_filter and _infer_zone(fn.file) != zone_filter:
             continue
         callees = [e.target_fn.split("::")[-1] for e in graph.callees(fn.id)]
-        routes.append({
+        entry: dict = {
             "method": fn.http_method or "GET",
             "path": fn.route,
             "handler": fn.name,
             "file": fn.file,
             "calls": callees[:8],
-        })
+        }
+        if fn.template:
+            entry["template"] = fn.template
+        routes.append(entry)
     routes.sort(key=lambda r: (r["file"], r["path"]))
     if not routes:
         return {"count": 0, "routes": [],
                 "note": "No routes found. Project may not use decorators."}
     return {"count": len(routes), "routes": routes}
+
+
+def _section_ui_map(graph: Graph, zone_filter: str | None) -> dict:
+    raw: dict = graph.meta.get("ui_map", {})
+    if not raw:
+        return {"count": 0, "routes": {},
+                "note": "No UI map. No templates found or project has no Flask routes."}
+    if zone_filter:
+        raw = {
+            path: data for path, data in raw.items()
+            if _infer_zone(data.get("file", "")) == zone_filter
+        }
+    return {"count": len(raw), "routes": raw}
 
 
 def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
