@@ -187,8 +187,9 @@ def compile_overview(rules_file: RulesFile, path: Path) -> None:
 
     for category in sorted(by_category):
         rule = by_category[category]
-        # One-line summary: first sentence of content
-        summary = rule.content.split(".")[0].strip()
+        # One-line summary: first sentence of content (split on ". " to avoid
+        # cutting mid-word at dots in identifiers like data_store.get_matrix())
+        summary = rule.content.split(". ")[0].strip().rstrip(".")
         lines.append(f"- {category}: {summary}")
 
     # Trim to budget

@@ -70,7 +70,9 @@ def _after_command(*_args, **_kwargs):
               help="Skip semantic enrichment (no Claude API call).")
 @click.option("--yes", "-y", is_flag=True, default=False,
               help="Accept all proposed rule changes without interactive review.")
-def init(path: str, no_semantic: bool, yes: bool):
+@click.option("--force", "-f", is_flag=True, default=False,
+              help="Force semantic re-enrichment even if graph is unchanged.")
+def init(path: str, no_semantic: bool, yes: bool, force: bool):
     """Build the dependency graph for the project.
 
     Automatically detects your IDE and registers the MCP server:
@@ -121,7 +123,7 @@ def init(path: str, no_semantic: bool, yes: bool):
     _run_debt_analysis(root, graph)
 
     if not no_semantic:
-        _run_semantic_enrichment(root, graph, yes=yes)
+        _run_semantic_enrichment(root, graph, yes=yes, force=force)
 
     _autodetect_ide(root)
 
@@ -223,7 +225,7 @@ def _load_dotenv(root: Path) -> None:
             os.environ[key] = value
 
 
-def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
+def _run_semantic_enrichment(root: Path, graph, yes: bool = False, force: bool = False) -> None:
     """One Claude API call -- generate architectural context and audit rules."""
     _load_dotenv(root)
 
@@ -267,7 +269,7 @@ def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
         click.echo(f"  Skipping semantic: {e}")
         return
 
-    if existing and not enricher.is_stale(graph, root, existing):
+    if existing and not enricher.is_stale(graph, root, existing) and not force:
         click.echo("  Semantic data up to date, skipping API call.")
         return
 
