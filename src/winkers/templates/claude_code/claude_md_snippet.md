@@ -24,5 +24,6 @@ function-level dependency tracking. MCP server `winkers` is connected.
 
 - `orient(["functions_graph"])` — full indexed function list with caller counts.
 - `orient(["routes"])` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
+- `orient(["ui_map"])` — Flask route→template links with UI elements (panels, tables, forms, headings).
 - `orient(["hotspots"])` — functions with many callers; high-impact changes.
 - `convention_read("<zone>")` — zone intent details (e.g. "app.py", "data_flow", "checklist").
