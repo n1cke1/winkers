@@ -6,11 +6,20 @@ import hashlib
 import json
 import os
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
+from winkers.conventions import (
+    DismissedFile,
+    ProposedRule,
+    RuleAdd,
+    RuleRemove,
+    RulesAudit,
+    RuleUpdate,
+)
 from winkers.models import Graph
 from winkers.store import STORE_DIR
 
@@ -55,9 +64,19 @@ Target: 1-2KB JSON. Every sentence must be actionable.
    Which functions belong together? What are the implicit "sections"?
    This is invisible to the graph but critical for the agent.
 
-7. WRONG APPROACHES. For each convention, describe what a reasonable
-   developer would try that would break things. Not obvious mistakes —
-   subtle ones that look correct.
+7. WRONG APPROACHES. For each rule in rules_audit.add, describe what a
+   reasonable developer would try that would break things. Not obvious
+   mistakes — subtle ones that look correct.
+
+8. RULES AUDIT. You will receive existing rules and detected patterns.
+   - add: new rules based on detector evidence or your own analysis.
+     3-6 high-quality rules beats 15 mediocre ones.
+   - update: rules whose content or wrong_approach is outdated.
+     Provide full new text for each changed field.
+   - remove: rules where the pattern is gone from the codebase.
+     Almost never remove manual rules (source=manual).
+   - Do NOT re-propose rules listed under "User dismissed".
+   Omit update/remove if empty.
 
 ### QUALITY TEST
 
@@ -80,19 +99,6 @@ class ZoneIntent(BaseModel):
     wrong_approach: str
 
 
-class Constraint(BaseModel):
-    id: str
-    name: str
-    why: str
-    severity: str  # critical | important | convention
-    affects: list[str] = []
-
-
-class Convention(BaseModel):
-    rule: str
-    wrong_approach: str
-
-
 class MonsterFileSection(BaseModel):
     prefix: str
     purpose: str
@@ -109,10 +115,15 @@ class SemanticLayer(BaseModel):
     domain_context: str = ""
     zone_intents: dict[str, ZoneIntent] = {}
     monster_files: dict[str, MonsterFile] = {}
-    constraints: list[Constraint] = []
-    conventions: list[Convention] = []
     new_feature_checklist: list[str] = []
     meta: dict[str, Any] = {}
+
+
+@dataclass
+class EnrichResult:
+    """Result of SemanticEnricher.enrich() — layer saved to disk, audit for rules."""
+    layer: SemanticLayer
+    rules_audit: RulesAudit = field(default_factory=RulesAudit)
 
 
 # ---------------------------------------------------------------------------
@@ -224,15 +235,95 @@ SCHEMA_TEXT = """\
       "where_to_add": "new endpoints go after ..."
     }
   },
-  "constraints": [
-    {"id": "C001", "name": "...", "why": "...",
-     "severity": "critical|important", "affects": ["specific_file.py"]}
-  ],
-  "conventions": [
-    {"rule": "...", "wrong_approach": "subtle mistake that looks correct"}
-  ],
+  "rules_audit": {
+    "add": [
+      {
+        "category": "architecture|data|numeric|api|validation|errors|testing|security",
+        "title": "Short rule name",
+        "content": "What to do — specific, actionable, names files/functions",
+        "wrong_approach": "Subtle mistake a developer would make that looks correct",
+        "affects": ["specific_file.py"],
+        "related": ["other_category"]
+      }
+    ],
+    "update": [
+      {"id": 1, "title": "...", "content": "...", "wrong_approach": "...", "reason": "why updated"}
+    ],
+    "remove": [
+      {"id": 2, "reason": "why removed — pattern no longer in codebase"}
+    ]
+  },
   "new_feature_checklist": ["1. ...", "2. ..."]
 }"""
+
+
+# ---------------------------------------------------------------------------
+# Context formatters for existing rules / evidence / dismissed
+# ---------------------------------------------------------------------------
+
+def _format_existing_rules(rules: list) -> str:
+    if not rules:
+        return ""
+    lines = ["## Existing rules (audit — update if outdated, remove if irrelevant, keep if valid)"]
+    for r in rules:
+        lines.append(f"[{r.id}] {r.category} | {r.title}  (source: {r.source})")
+        lines.append(f"    {r.content}")
+        if r.wrong_approach:
+            lines.append(f"    wrong_approach: {r.wrong_approach}")
+    return "\n".join(lines)
+
+
+def _format_evidence(evidence: list[ProposedRule]) -> str:
+    if not evidence:
+        return ""
+    lines = ["## Detected patterns (use as evidence for rules_audit.add)"]
+    for e in evidence:
+        line = f"- [{e.category}] {e.title}: {e.content}"
+        if e.affects:
+            line += f"  (affects: {', '.join(e.affects[:3])})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_dismissed(dismissed: DismissedFile) -> str:
+    if not dismissed.dismissed_adds:
+        return ""
+    lines = ["## User dismissed — do NOT re-propose"]
+    for d in dismissed.dismissed_adds:
+        lines.append(f"- [{d.category}] {d.title}")
+    return "\n".join(lines)
+
+
+def _parse_rules_audit(raw: dict) -> RulesAudit:
+    add = [
+        RuleAdd(
+            category=r.get("category", "architecture"),
+            title=r.get("title", ""),
+            content=r.get("content", ""),
+            wrong_approach=r.get("wrong_approach", ""),
+            affects=r.get("affects", []),
+            related=r.get("related", []),
+        )
+        for r in raw.get("add", [])
+        if r.get("title") and r.get("content")
+    ]
+    update = [
+        RuleUpdate(
+            id=r["id"],
+            title=r.get("title", ""),
+            content=r.get("content", ""),
+            wrong_approach=r.get("wrong_approach", ""),
+            reason=r.get("reason", ""),
+        )
+        for r in raw.get("update", [])
+        if isinstance(r.get("id"), int)
+    ]
+    remove = [
+        RuleRemove(id=r["id"], reason=r.get("reason", ""))
+        for r in raw.get("remove", [])
+        if isinstance(r.get("id"), int)
+    ]
+    return RulesAudit(add=add, update=update, remove=remove)
 
 
 # ---------------------------------------------------------------------------
@@ -268,17 +359,29 @@ class SemanticEnricher:
     def enrich(
         self, graph: Graph, root: Path,
         insights_text: str = "",
-    ) -> SemanticLayer:
-        """One API call -- send project code, get semantic layer back."""
+        existing_rules: list | None = None,
+        detector_evidence: list[ProposedRule] | None = None,
+        dismissed: DismissedFile | None = None,
+    ) -> EnrichResult:
+        """One API call -- send project code + rules context, get semantic layer + audit back."""
         project_text = _build_project_summary(graph, root)
 
-        user_msg = (
-            "Here is the project:\n"
-            + project_text
-        )
+        user_msg = "Here is the project:\n" + project_text
 
         if insights_text:
             user_msg += "\n\n---\n\n" + insights_text
+
+        context_sections = []
+        if existing_rules:
+            context_sections.append(_format_existing_rules(existing_rules))
+        if detector_evidence:
+            context_sections.append(_format_evidence(detector_evidence))
+        if dismissed:
+            dismissed_text = _format_dismissed(dismissed)
+            if dismissed_text:
+                context_sections.append(dismissed_text)
+        if context_sections:
+            user_msg += "\n\n---\n\n" + "\n\n".join(context_sections)
 
         user_msg += "\n\n---\n\nJSON schema:\n" + SCHEMA_TEXT
 
@@ -327,7 +430,10 @@ class SemanticEnricher:
                 text = text.strip().split("\n", 1)[-1]
                 text = text.rsplit("```", 1)[0].strip()
             parsed = json.loads(text)
+            # Extract rules_audit before validating SemanticLayer
+            raw_audit = parsed.pop("rules_audit", {})
             layer = SemanticLayer.model_validate(parsed)
+            rules_audit = _parse_rules_audit(raw_audit)
         except Exception as e:
             raise RuntimeError(f"Semantic enrichment failed: {e}") from e
 
@@ -340,7 +446,7 @@ class SemanticEnricher:
             "output_tokens": getattr(usage, "output_tokens", 0),
             "duration_s": round(elapsed, 1),
         }
-        return layer
+        return EnrichResult(layer=layer, rules_audit=rules_audit)
 
     def is_stale(self, graph: Graph, root: Path, existing: SemanticLayer) -> bool:
         """Check if any code changed since last enrichment."""

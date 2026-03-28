@@ -1,4 +1,4 @@
-"""Tests for semantic layer (v2 — project-level intent/constraints/conventions)."""
+"""Tests for semantic layer."""
 
 import json
 from pathlib import Path
@@ -7,8 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from winkers.semantic import (
-    Constraint,
-    Convention,
+    EnrichResult,
     SemanticEnricher,
     SemanticLayer,
     SemanticStore,
@@ -34,21 +33,6 @@ def sample_layer():
                 wrong_approach="Importing DB here",
             )
         },
-        constraints=[
-            Constraint(
-                id="C001",
-                name="Decimal money",
-                why="float gives rounding errors",
-                severity="critical",
-                affects=["modules/pricing.py"],
-            )
-        ],
-        conventions=[
-            Convention(
-                rule="Money as Decimal, never float.",
-                wrong_approach="Using float for prices",
-            )
-        ],
         new_feature_checklist=["1. Add service", "2. Add tests"],
     )
 
@@ -61,8 +45,6 @@ def test_store_save_load_roundtrip(sem_store, sample_layer):
     assert loaded is not None
     assert loaded.data_flow == "DB -> pricing -> API response."
     assert loaded.zone_intents["modules"].why == "Core business logic."
-    assert loaded.constraints[0].id == "C001"
-    assert loaded.conventions[0].rule == "Money as Decimal, never float."
     assert len(loaded.new_feature_checklist) == 2
 
 
@@ -134,21 +116,28 @@ SAMPLE_API_RESPONSE = json.dumps({
             "wrong_approach": "Adding business logic here",
         }
     },
-    "constraints": [
-        {
-            "id": "C001",
-            "name": "Positive prices",
-            "why": "Negative prices break invoicing",
-            "severity": "critical",
-            "affects": ["calc.py"],
-        }
-    ],
-    "conventions": [
-        {
-            "rule": "Pure functions in domain layer.",
-            "wrong_approach": "Side effects in pricing functions",
-        }
-    ],
+    "rules_audit": {
+        "add": [
+            {
+                "category": "numeric",
+                "title": "Positive prices",
+                "content": "Prices must always be positive integers in cents.",
+                "wrong_approach": "Using float — causes rounding errors",
+                "affects": ["calc.py"],
+                "related": ["data"],
+            },
+            {
+                "category": "architecture",
+                "title": "Pure functions in domain layer",
+                "content": "Domain functions must be pure — no side effects.",
+                "wrong_approach": "Side effects in pricing functions",
+                "affects": [],
+                "related": [],
+            },
+        ],
+        "update": [],
+        "remove": [],
+    },
     "new_feature_checklist": ["1. Add function", "2. Add test"],
 })
 
@@ -170,14 +159,49 @@ def test_enricher_enrich(tmp_path):
         enricher._client = mock_client
         result = enricher.enrich(graph, tmp_path)
 
-    assert result.data_flow == "Input -> calc -> output."
-    assert "root" in result.zone_intents
-    assert len(result.constraints) == 1
-    assert result.constraints[0].id == "C001"
-    assert len(result.conventions) == 1
-    assert len(result.new_feature_checklist) == 2
-    assert "graph_hash" in result.meta
+    assert isinstance(result, EnrichResult)
+    assert result.layer.data_flow == "Input -> calc -> output."
+    assert "root" in result.layer.zone_intents
+    assert len(result.rules_audit.add) == 2
+    assert result.rules_audit.add[0].category == "numeric"
+    assert result.rules_audit.add[0].affects == ["calc.py"]
+    assert len(result.layer.new_feature_checklist) == 2
+    assert "graph_hash" in result.layer.meta
     mock_client.messages.create.assert_called_once()
+
+
+@patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
+def test_enricher_proposed_rules_filtered(tmp_path):
+    """Rules without title or content are dropped."""
+    from winkers.graph import GraphBuilder
+
+    (tmp_path / "calc.py").write_text("def add(a, b):\n    return a+b\n")
+    graph = GraphBuilder().build(tmp_path)
+
+    bad_response = json.dumps({
+        "data_flow": "x",
+        "domain_context": "y",
+        "zone_intents": {},
+        "rules_audit": {
+            "add": [
+                {"category": "data", "title": "", "content": "something"},   # no title
+                {"category": "data", "title": "ok", "content": ""},           # no content
+                {"category": "data", "title": "good", "content": "valid rule"},
+            ],
+        },
+        "new_feature_checklist": [],
+    })
+
+    mock_mod, mock_client = _mock_anthropic()
+    mock_client.messages.create.return_value = _make_response(bad_response)
+
+    with patch.dict("sys.modules", {"anthropic": mock_mod}):
+        enricher = SemanticEnricher(api_key="test-key")
+        enricher._client = mock_client
+        result = enricher.enrich(graph, tmp_path)
+
+    assert len(result.rules_audit.add) == 1
+    assert result.rules_audit.add[0].title == "good"
 
 
 @patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
@@ -195,7 +219,6 @@ def test_enricher_is_stale(tmp_path):
     layer = SemanticLayer(meta={"graph_hash": _graph_hash(graph, tmp_path)})
     assert not enricher.is_stale(graph, tmp_path, layer)
 
-    # Change code
     f.write_text("def add(a, b):\n    return a + b + 1\n", encoding="utf-8")
     assert enricher.is_stale(graph, tmp_path, layer)
 

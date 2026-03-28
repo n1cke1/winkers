@@ -334,7 +334,7 @@ async def test_get_tool_stats_with_data(graph_project):
             ToolCall(name="Read", tokens_in=500, tokens_out=20),
             ToolCall(name="Read", tokens_in=600, tokens_out=25),
             ToolCall(name="Edit", tokens_in=800, tokens_out=50),
-            ToolCall(name="mcp__winkers__map", tokens_in=300, tokens_out=200),
+            ToolCall(name="mcp__winkers__orient", tokens_in=300, tokens_out=200),
         ],
     )
     store.save(ScoredSession(session=session))
@@ -350,9 +350,9 @@ async def test_get_tool_stats_with_data(graph_project):
         assert by_name["Read"]["tokens_in"] == 1100
         assert by_name["Read"]["source"] == "recorded"
         assert by_name["Edit"]["calls"] == 1
-        assert by_name["mcp__winkers__map"]["calls"] == 1
-        # Recorded map tool should have estimated_out from graph
-        assert "estimated_out" in by_name["mcp__winkers__map"]
+        assert by_name["mcp__winkers__orient"]["calls"] == 1
+        # Recorded orient tool should have estimated_out from graph
+        assert "estimated_out" in by_name["mcp__winkers__orient"]
 
 
 @pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_get_tool_stats_estimated_only(graph_project):
         assert len(data) > 0
         assert all(d["source"] == "estimated" for d in data)
         names = {d["name"] for d in data}
-        assert "mcp__winkers__map" in names
+        assert "mcp__winkers__orient" in names
         assert "mcp__winkers__scope" in names
         for d in data:
             assert d["estimated_out"] > 0

@@ -1,4 +1,4 @@
-"""MCP tool definitions: map, full_map, scope."""
+"""MCP tool definitions: orient, scope, convention_read, rule_read."""
 
 from __future__ import annotations
 
@@ -22,64 +22,46 @@ def register_tools(
     async def list_tools() -> list[Tool]:
         return [
             Tool(
-                name="map",
+                name="orient",
                 description=(
-                    "IMPORTANT: Call this FIRST before any code changes."
-                    " Returns critical project constraints, conventions,"
-                    " and before_writing_code checklist that you MUST follow."
-                    " Ignoring these causes architectural damage."
-                    " Also returns: zones with intents, hotspots."
-                    " Use routes() tool for HTTP endpoints."
-                    " Use zone/file filters to narrow down."
+                    "IMPORTANT: Call this FIRST. Specify what you need via 'include'."
+                    " 'map' = project structure, zones, hotspots, data flow."
+                    " 'conventions' = domain context, zone intents, business logic."
+                    " 'rules_list' = coding rules grouped by category."
+                    " 'functions_graph' = indexed call graph."
+                    " 'hotspots' = high-impact functions."
+                    " 'routes' = HTTP endpoints."
+                    " Combine: include=['map','conventions'] or include=['all']."
+                    " Then use convention_read/rule_read for details."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "zone": {"type": "string", "description": "Filter by zone name"},
-                        "file": {"type": "string", "description": "Filter by file path"},
-                    },
-                },
-            ),
-            Tool(
-                name="functions_graph",
-                description=(
-                    "Indexed function graph: every function with a numeric ID,"
-                    " callers as index references, and complexity."
-                    " Use index numbers to quickly identify dependencies."
-                    " High callers count = many dependents, change carefully."
-                    " Use before calling scope on specific functions."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            Tool(
-                name="hotspots",
-                description=(
-                    "Critical dependency graph: functions with many callers and"
-                    " WHO calls them. These are high-impact functions --"
-                    " changing their signature or behavior affects many callers."
-                    " ALWAYS check this before modifying a frequently-called function."
-                    " Each entry shows the function, its callers list, and the"
-                    " call expressions so you understand HOW it's being used."
-                    " Try min_callers=5 for small projects, 10 for large ones."
-                ),
-                inputSchema={
-                    "type": "object",
-                    "properties": {
+                        "include": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "What to include: 'map', 'conventions', 'rules_list',"
+                                " 'functions_graph', 'hotspots', 'routes', 'all'"
+                            ),
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Filter map/functions_graph by zone name",
+                        },
                         "min_callers": {
                             "type": "integer",
-                            "description": "Minimum callers (default 10, use 5 for small projects)",
+                            "description": "Min callers for hotspots (default 10)",
                         },
                     },
+                    "required": ["include"],
                 },
             ),
             Tool(
                 name="scope",
                 description=(
                     "Full context for a function or file: callers, callees,"
-                    " related project constraints, recent git changes."
+                    " related rules, recent git changes."
                 ),
                 inputSchema={
                     "type": "object",
@@ -90,25 +72,40 @@ def register_tools(
                 },
             ),
             Tool(
-                name="routes",
+                name="convention_read",
                 description=(
-                    "HTTP routes (Flask, FastAPI, etc.): method, path,"
-                    " handler function, and what each handler calls."
-                    " Use to find analogous endpoints before adding new ones."
-                    " Filter by path pattern or zone."
+                    "Read detailed convention for a zone, file, or aspect."
+                    " target = zone name (e.g. 'api'), file path, or"
+                    " 'data_flow' / 'domain_context' / 'checklist'."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "filter": {
+                        "target": {
                             "type": "string",
-                            "description": "Filter routes by path substring (e.g. 'carbon')",
-                        },
-                        "zone": {
-                            "type": "string",
-                            "description": "Filter routes by zone name",
+                            "description": "Zone name, file path, or aspect name",
                         },
                     },
+                    "required": ["target"],
+                },
+            ),
+            Tool(
+                name="rule_read",
+                description=(
+                    "Read the full coding rule for a category."
+                    " Returns rule content, wrong_approach, and related categories."
+                    " Categories: architecture, data, numeric, api, validation,"
+                    " errors, testing, security."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "Rule category name",
+                        },
+                    },
+                    "required": ["category"],
                 },
             ),
         ]
@@ -126,16 +123,14 @@ def register_tools(
                 text='{"error": "Graph not initialized. Run winkers init first."}',
             )]
 
-        if name == "map":
-            result = _tool_map(graph, arguments, root)
-        elif name == "functions_graph":
-            result = _tool_functions_graph(graph)
-        elif name == "hotspots":
-            result = _tool_hotspots(graph, arguments)
+        if name == "orient":
+            result = _tool_orient(graph, arguments, root)
         elif name == "scope":
             result = _tool_scope(graph, arguments, root)
-        elif name == "routes":
-            result = _tool_routes(graph, arguments)
+        elif name == "convention_read":
+            result = _tool_convention_read(arguments, root)
+        elif name == "rule_read":
+            result = _tool_rule_read(arguments, root)
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -160,28 +155,56 @@ def _log_call(root: Path, tool: str, args: dict) -> None:
 # Tool implementations
 # ---------------------------------------------------------------------------
 
-
 def _load_semantic(root: Path):
-    """Load semantic layer if available."""
     from winkers.semantic import SemanticStore
-    store = SemanticStore(root)
-    return store.load()
+    return SemanticStore(root).load()
 
 
-def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
-    zone_filter = args.get("zone")
+def _load_rules(root: Path):
+    from winkers.conventions import RulesStore
+    return RulesStore(root).load()
 
+
+def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
+    include = args.get("include", [])
+    if "all" in include:
+        include = ["map", "conventions", "rules_list", "functions_graph", "hotspots", "routes"]
+
+    zone = args.get("zone")
+    min_callers = args.get("min_callers", 10)
+    result: dict[str, Any] = {}
+
+    if "map" in include:
+        result["map"] = _section_map(graph, zone, root)
+    if "functions_graph" in include:
+        result["functions_graph"] = _section_functions_graph(graph, zone)
+    if "conventions" in include:
+        result["conventions"] = _section_conventions(root)
+    if "rules_list" in include:
+        result["rules_list"] = _section_rules_list(root)
+    if "hotspots" in include:
+        result["hotspots"] = _section_hotspots(graph, min_callers)
+    if "routes" in include:
+        result["routes"] = _section_routes(graph, zone)
+
+    if not result:
+        result["error"] = (
+            "No valid include values. Use: map, conventions, rules_list,"
+            " functions_graph, hotspots, routes, all"
+        )
+    return result
+
+
+def _section_map(graph: Graph, zone_filter: str | None, root: Path) -> dict:
     zones: dict[str, list[str]] = {}
     for f in graph.files.values():
         z = f.zone or _infer_zone(f.path)
         zones.setdefault(z, []).append(f.path)
 
-    # Filter by zone
     if zone_filter:
         zones = {z: files for z, files in zones.items() if z == zone_filter}
 
-    hotspots = _get_hotspots(graph, top=5)
-    semantic = _load_semantic(root) if root else None
+    semantic = _load_semantic(root)
 
     zone_list = []
     for z, files in sorted(zones.items()):
@@ -194,7 +217,6 @@ def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "imports_from": _zone_imports_from(z, zones, graph),
             "imported_by": _zone_imported_by(z, zones, graph),
         }
-        # Count routes in this zone (details via routes() tool)
         route_count = sum(
             1 for f in files
             for fn_id in (graph.files[f].function_ids if f in graph.files else [])
@@ -202,57 +224,30 @@ def _tool_map(graph: Graph, args: dict, root: Path | None = None) -> dict:
         )
         if route_count:
             entry["routes_count"] = route_count
-
         if semantic and z in semantic.zone_intents:
             intent = semantic.zone_intents[z]
-            entry["intent"] = {
-                "why": intent.why,
-                "wrong_approach": intent.wrong_approach,
-            }
+            entry["intent"] = {"why": intent.why, "wrong_approach": intent.wrong_approach}
         zone_list.append(entry)
 
     result: dict[str, Any] = {
-        "project": ".",
-        "languages": graph.meta.get("languages", []),
         "total_files": len(graph.files),
         "total_functions": len(graph.functions),
+        "languages": graph.meta.get("languages", []),
         "zones": zone_list,
-        "hotspots": hotspots,
+        "hotspots_top5": _get_hotspots(graph, top=5),
     }
-    if semantic:
-        if semantic.data_flow:
-            result["data_flow"] = semantic.data_flow
-        if semantic.domain_context:
-            result["domain_context"] = semantic.domain_context
-        if semantic.monster_files:
-            result["monster_files"] = {
-                f: {"sections": [s.model_dump() for s in m.sections],
-                    "where_to_add": m.where_to_add}
-                for f, m in semantic.monster_files.items()
-            }
-        if semantic.conventions:
-            result["conventions"] = [
-                {"rule": c.rule, "wrong_approach": c.wrong_approach}
-                for c in semantic.conventions
-            ]
-        if semantic.constraints:
-            result["constraints"] = [
-                {"id": c.id, "name": c.name, "why": c.why,
-                 "severity": c.severity, "affects": c.affects}
-                for c in semantic.constraints
-            ]
-        if semantic.new_feature_checklist:
-            result["before_writing_code"] = semantic.new_feature_checklist
+    if semantic and semantic.data_flow:
+        result["data_flow"] = semantic.data_flow
     return result
 
 
-def _tool_functions_graph(graph: Graph) -> dict:
-    """Indexed function graph: numeric IDs, callers as index references."""
-    # Build index: fn_id → numeric index
+def _section_functions_graph(graph: Graph, zone_filter: str | None) -> dict:
     fn_ids = sorted(graph.functions.keys())
-    id_to_idx: dict[str, int] = {fid: i + 1 for i, fid in enumerate(fn_ids)}
+    if zone_filter:
+        fn_ids = [fid for fid in fn_ids
+                  if _infer_zone(graph.functions[fid].file) == zone_filter]
 
-    # Build caller lookup
+    id_to_idx: dict[str, int] = {fid: i + 1 for i, fid in enumerate(fn_ids)}
     caller_map: dict[str, list[str]] = {}
     for edge in graph.call_edges:
         caller_map.setdefault(edge.target_fn, []).append(edge.source_fn)
@@ -261,31 +256,65 @@ def _tool_functions_graph(graph: Graph) -> dict:
     for fid in fn_ids:
         fn = graph.functions[fid]
         idx = id_to_idx[fid]
-        callers = caller_map.get(fid, [])
         caller_indices = sorted(
-            id_to_idx[c] for c in callers if c in id_to_idx
+            id_to_idx[c] for c in caller_map.get(fid, []) if c in id_to_idx
         )
-        entry: dict[str, Any] = {
-            "id": fn.id,
-            "name": fn.name,
-            "file": fn.file,
-        }
+        entry: dict[str, Any] = {"id": fn.id, "name": fn.name, "file": fn.file}
         if caller_indices:
             entry["callers"] = caller_indices
         if fn.complexity and fn.complexity > 1:
             entry["cx"] = fn.complexity
         functions[str(idx)] = entry
 
+    return {"total": len(functions), "functions": functions}
+
+
+def _section_conventions(root: Path) -> dict:
+    semantic = _load_semantic(root)
+    if semantic is None:
+        return {"note": "No semantic.json found. Run winkers init."}
+
+    result: dict[str, Any] = {}
+    if semantic.domain_context:
+        result["domain_context"] = semantic.domain_context
+    if semantic.zone_intents:
+        result["zone_intents"] = {
+            z: {"why": i.why, "wrong_approach": i.wrong_approach}
+            for z, i in semantic.zone_intents.items()
+        }
+    if semantic.monster_files:
+        result["monster_files"] = {
+            f: {"sections": [s.model_dump() for s in m.sections],
+                "where_to_add": m.where_to_add}
+            for f, m in semantic.monster_files.items()
+        }
+    if semantic.new_feature_checklist:
+        result["before_writing_code"] = semantic.new_feature_checklist
+    return result
+
+
+def _section_rules_list(root: Path) -> dict:
+    rules_file = _load_rules(root)
+    if not rules_file.rules:
+        return {"note": "No rules yet. Run winkers init or winkers conventions add."}
+
+    by_category: dict[str, list[dict]] = {}
+    for r in rules_file.rules:
+        by_category.setdefault(r.category, []).append({
+            "id": r.id,
+            "title": r.title,
+            "related": r.related,
+        })
+
     return {
-        "total": len(functions),
-        "functions": functions,
+        "total": len(rules_file.rules),
+        "categories": {
+            cat: rules for cat, rules in sorted(by_category.items())
+        },
     }
 
 
-def _tool_hotspots(graph: Graph, args: dict) -> dict:
-    """Functions with many callers + who calls them."""
-    min_callers = args.get("min_callers", 10)
-
+def _section_hotspots(graph: Graph, min_callers: int) -> dict:
     hotspots = []
     for fn_id, fn in graph.functions.items():
         caller_edges = graph.callers(fn_id)
@@ -307,14 +336,30 @@ def _tool_hotspots(graph: Graph, args: dict) -> dict:
                 for e in caller_edges
             ],
         })
-
     hotspots.sort(key=lambda h: h["callers_count"], reverse=True)
-    return {
-        "min_callers": min_callers,
-        "count": len(hotspots),
-        "hotspots": hotspots,
-    }
+    return {"min_callers": min_callers, "count": len(hotspots), "hotspots": hotspots}
 
+
+def _section_routes(graph: Graph, zone_filter: str | None) -> dict:
+    routes = []
+    for fn in graph.functions.values():
+        if not fn.route:
+            continue
+        if zone_filter and _infer_zone(fn.file) != zone_filter:
+            continue
+        callees = [e.target_fn.split("::")[-1] for e in graph.callees(fn.id)]
+        routes.append({
+            "method": fn.http_method or "GET",
+            "path": fn.route,
+            "handler": fn.name,
+            "file": fn.file,
+            "calls": callees[:8],
+        })
+    routes.sort(key=lambda r: (r["file"], r["path"]))
+    if not routes:
+        return {"count": 0, "routes": [],
+                "note": "No routes found. Project may not use decorators."}
+    return {"count": len(routes), "routes": routes}
 
 
 def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
@@ -352,14 +397,11 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
                 for e in caller_edges
             ],
             "callees": [
-                {
-                    "fn": e.target_fn,
-                    "expression": e.call_site.expression,
-                }
+                {"fn": e.target_fn, "expression": e.call_site.expression}
                 for e in callee_edges
             ],
-            "constraints": _build_constraints(fn, caller_edges),
-            "related_constraints": _related_constraints(fn, root),
+            "callers_constraint": _build_callers_constraint(fn, caller_edges),
+            "related_rules": _related_rules(fn, root),
             "recent_changes": _recent_changes_from_graph(fn, graph),
         }
 
@@ -387,44 +429,70 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
     return {"error": "Provide 'function' or 'file' argument"}
 
 
+def _tool_convention_read(args: dict, root: Path) -> dict:
+    target = args.get("target", "")
+    semantic = _load_semantic(root)
 
-def _tool_routes(graph: Graph, args: dict) -> dict:
-    """HTTP routes with handler and callees."""
-    path_filter = (args.get("filter") or "").lower()
-    zone_filter = args.get("zone")
+    if semantic is None:
+        return {"error": "No semantic.json found. Run winkers init."}
 
-    routes = []
-    for fn in graph.functions.values():
-        if not fn.route:
-            continue
-        if zone_filter:
-            fn_zone = _infer_zone(fn.file)
-            if fn_zone != zone_filter:
-                continue
-        if path_filter and path_filter not in fn.route.lower():
-            continue
+    # Aspect names
+    if target == "data_flow":
+        return {"data_flow": semantic.data_flow or "Not available."}
+    if target == "domain_context":
+        return {"domain_context": semantic.domain_context or "Not available."}
+    if target == "checklist":
+        return {"checklist": semantic.new_feature_checklist}
 
-        callees = [
-            e.target_fn.split("::")[-1]
-            for e in graph.callees(fn.id)
-        ]
-        routes.append({
-            "method": fn.http_method or "GET",
-            "path": fn.route,
-            "handler": fn.name,
-            "file": fn.file,
-            "calls": callees[:8],
-        })
-
-    routes.sort(key=lambda r: (r["file"], r["path"]))
-
-    if not routes:
+    # Zone name
+    if target in semantic.zone_intents:
+        intent = semantic.zone_intents[target]
         return {
-            "count": 0, "routes": [],
-            "note": "No routes found. Project may not use decorators.",
+            "zone": target,
+            "why": intent.why,
+            "wrong_approach": intent.wrong_approach,
         }
 
-    return {"count": len(routes), "routes": routes}
+    # File path (monster file)
+    if target in semantic.monster_files:
+        mf = semantic.monster_files[target]
+        return {
+            "file": target,
+            "sections": [s.model_dump() for s in mf.sections],
+            "where_to_add": mf.where_to_add,
+        }
+
+    return {
+        "error": f"Target '{target}' not found.",
+        "available_zones": list(semantic.zone_intents.keys()),
+        "available_files": list(semantic.monster_files.keys()),
+        "aspects": ["data_flow", "domain_context", "checklist"],
+    }
+
+
+def _tool_rule_read(args: dict, root: Path) -> dict:
+    category = args.get("category", "")
+    rules_file = _load_rules(root)
+
+    matches = [r for r in rules_file.rules if r.category == category]
+    if not matches:
+        available = sorted({r.category for r in rules_file.rules})
+        return {"error": f"No rules for category '{category}'.", "available": available}
+
+    return {
+        "category": category,
+        "rules": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "content": r.content,
+                "wrong_approach": r.wrong_approach,
+                "affects": r.affects,
+                "related": r.related,
+            }
+            for r in matches
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -474,14 +542,6 @@ def _zone_imported_by(zone: str, zones: dict[str, list[str]], graph: Graph) -> l
     return sorted(importing_zones)
 
 
-def _file_imports_from(path: str, graph: Graph) -> list[str]:
-    return [e.target_file for e in graph.import_edges if e.source_file == path]
-
-
-def _file_imported_by(path: str, graph: Graph) -> list[str]:
-    return [e.source_file for e in graph.import_edges if e.target_file == path]
-
-
 def _get_hotspots(graph: Graph, top: int = 5) -> list[dict]:
     scored = [(fid, len(graph.callers(fid))) for fid in graph.functions]
     scored.sort(key=lambda x: x[1], reverse=True)
@@ -498,29 +558,26 @@ def _get_hotspots(graph: Graph, top: int = 5) -> list[dict]:
 
 
 def _recent_changes_from_graph(fn: Any, graph: Graph) -> list[dict]:
-    """Return recent commits from pre-collected graph data."""
     file_node = graph.files.get(fn.file)
     if not file_node or not file_node.recent_commits:
         return []
     return file_node.recent_commits
 
 
-def _related_constraints(fn: Any, root: Path | None) -> list[dict]:
-    """Find semantic constraints that affect this function's zone or file."""
+def _related_rules(fn: Any, root: Path | None) -> list[dict]:
+    """Find rules from rules.json that affect this function's zone or file."""
     if root is None:
         return []
-    semantic = _load_semantic(root)
-    if semantic is None:
-        return []
+    rules_file = _load_rules(root)
     zone = _infer_zone(fn.file)
     return [
-        {"id": c.id, "name": c.name, "why": c.why, "severity": c.severity}
-        for c in semantic.constraints
-        if zone in c.affects or fn.file in c.affects
+        {"id": r.id, "category": r.category, "title": r.title}
+        for r in rules_file.rules
+        if zone in r.affects or fn.file in r.affects
     ]
 
 
-def _build_constraints(fn: Any, caller_edges: list) -> dict:
+def _build_callers_constraint(fn: Any, caller_edges: list) -> dict:
     return {
         "callers_expect": _signature(fn),
         "safe_changes": [

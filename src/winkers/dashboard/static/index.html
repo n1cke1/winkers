@@ -144,6 +144,42 @@
   .savings-bar .sv-num { font-size: 18px; font-weight: 700; color: #a78bfa; }
   .savings-bar .sv-label { font-size: 11px; color: #64748b; }
 
+  /* Rules & Conventions pages */
+  #rules-page, #conventions-page { flex: 1; overflow-y: auto; padding: 20px; }
+  .rules-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .rules-header h2 { font-size: 16px; font-weight: 700; color: #a78bfa; }
+  .btn-add { background: #4f46e5; border-color: #4f46e5; color: #fff; font-size: 12px; padding: 5px 12px; }
+  .btn-add:hover { background: #6366f1; }
+  .rule-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; display: flex; gap: 12px; align-items: flex-start; }
+  .rule-card .rc-body { flex: 1; min-width: 0; }
+  .rule-card .rc-cat { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: #1e293b; border: 1px solid #7c3aed; color: #a78bfa; padding: 1px 7px; border-radius: 4px; margin-bottom: 6px; }
+  .rule-card .rc-title { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 4px; }
+  .rule-card .rc-content { font-size: 12px; color: #94a3b8; line-height: 1.5; margin-bottom: 4px; }
+  .rule-card .rc-wrong { font-size: 11px; color: #f87171; font-style: italic; margin-bottom: 4px; }
+  .rule-card .rc-meta { font-size: 11px; color: #475569; }
+  .rule-card .rc-actions { flex-shrink: 0; display: flex; gap: 6px; }
+  .btn-dismiss { background: #1e2235; border-color: #2d3148; color: #94a3b8; font-size: 11px; padding: 3px 10px; }
+  .btn-dismiss:hover { border-color: #ef4444; color: #ef4444; }
+  .add-rule-form { background: #1a1d27; border: 1px solid #4f46e5; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: none; }
+  .add-rule-form h3 { font-size: 13px; color: #a78bfa; margin-bottom: 12px; }
+  .form-row { margin-bottom: 10px; }
+  .form-row label { display: block; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .form-row input, .form-row textarea, .form-row select { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; font-size: 13px; padding: 7px 10px; font-family: inherit; }
+  .form-row textarea { resize: vertical; min-height: 70px; }
+  .form-row input:focus, .form-row textarea:focus, .form-row select:focus { outline: none; border-color: #4f46e5; }
+  .form-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .conv-section { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+  .conv-section h3 { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .conv-text { font-size: 13px; color: #e2e8f0; line-height: 1.6; }
+  .conv-zone { background: #0f1117; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+  .conv-zone .cz-name { font-size: 12px; font-weight: 700; color: #a78bfa; margin-bottom: 4px; }
+  .conv-zone .cz-why { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+  .conv-zone .cz-wrong { font-size: 11px; color: #f87171; font-style: italic; }
+  .conv-checklist { list-style: none; }
+  .conv-checklist li { font-size: 12px; color: #94a3b8; padding: 3px 0; border-bottom: 1px solid #1a1d27; }
+  .conv-checklist li::before { content: "→ "; color: #a78bfa; }
+  .empty-state { color: #475569; font-size: 13px; padding: 20px 0; text-align: center; }
+
   /* Tool stats table */
   .tool-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .tool-table th { text-align: left; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 10px; border-bottom: 1px solid #2d3148; }
@@ -178,6 +214,8 @@
 
 <div id="tab-bar">
   <div class="tab active" data-tab="graph-tab">Graph</div>
+  <div class="tab" data-tab="rules-tab">Rules</div>
+  <div class="tab" data-tab="conventions-tab">Conventions</div>
   <div class="tab" data-tab="learning-tab">Agent Learning</div>
 </div>
 
@@ -244,6 +282,57 @@
     </div>
   </div>
 </div><!-- /learning-tab -->
+
+<div id="rules-tab" class="tab-content">
+  <div id="rules-page">
+    <div class="rules-header">
+      <h2>Rules <span id="rules-count" style="font-size:13px;color:#64748b;font-weight:400"></span></h2>
+      <button class="btn-add" id="add-rule-btn">+ Add Rule</button>
+    </div>
+    <div class="add-rule-form" id="add-rule-form">
+      <h3>New Manual Rule</h3>
+      <div class="form-row">
+        <label>Category</label>
+        <select id="rule-category">
+          <option value="architecture">architecture</option>
+          <option value="data">data</option>
+          <option value="numeric">numeric</option>
+          <option value="api">api</option>
+          <option value="validation">validation</option>
+          <option value="errors">errors</option>
+          <option value="testing">testing</option>
+          <option value="security">security</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Title</label>
+        <input type="text" id="rule-title" placeholder="Short rule name">
+      </div>
+      <div class="form-row">
+        <label>Content</label>
+        <textarea id="rule-content" placeholder="What to do — specific, actionable"></textarea>
+      </div>
+      <div class="form-row">
+        <label>Wrong approach <span style="color:#475569">(optional)</span></label>
+        <textarea id="rule-wrong" placeholder="Subtle mistake a developer would make"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn-add" id="rule-save-btn">Save</button>
+        <button id="rule-cancel-btn">Cancel</button>
+      </div>
+    </div>
+    <div id="rules-list"></div>
+  </div>
+</div><!-- /rules-tab -->
+
+<div id="conventions-tab" class="tab-content">
+  <div id="conventions-page">
+    <div class="rules-header">
+      <h2>Conventions</h2>
+    </div>
+    <div id="conventions-content"></div>
+  </div>
+</div><!-- /conventions-tab -->
 
 <div id="history-panel">
   <h2>Snapshot History</h2>
@@ -868,6 +957,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     document.getElementById(tab.dataset.tab).classList.add('active');
     if (tab.dataset.tab === 'learning-tab') loadLearningPage();
+    if (tab.dataset.tab === 'rules-tab') loadRulesPage();
+    if (tab.dataset.tab === 'conventions-tab') loadConventionsPage();
   });
 });
 
@@ -1079,6 +1170,122 @@ async function loadLearningPage() {
       </div>`;
     }).join('');
   }
+}
+
+// --- Rules tab ---
+async function loadRulesPage() {
+  const list = document.getElementById('rules-list');
+  const count = document.getElementById('rules-count');
+  list.innerHTML = '<div class="empty-state">Loading…</div>';
+  try {
+    const res = await fetch('/api/rules');
+    const rules = await res.json();
+    count.textContent = rules.length ? `(${rules.length})` : '';
+    if (!rules.length) {
+      list.innerHTML = '<div class="empty-state">No rules yet. Run winkers init or add one manually.</div>';
+      return;
+    }
+    list.innerHTML = rules.map(r => {
+      const req = r.stats.times_requested;
+      const src = r.source === 'manual' ? '✎ manual' : r.source;
+      const wrong = r.wrong_approach ? `<div class="rc-wrong">✗ ${escHtml(r.wrong_approach)}</div>` : '';
+      return `<div class="rule-card" data-id="${r.id}">
+        <div class="rc-body">
+          <span class="rc-cat">${escHtml(r.category)}</span>
+          <div class="rc-title">${escHtml(r.title)}</div>
+          <div class="rc-content">${escHtml(r.content)}</div>
+          ${wrong}
+          <div class="rc-meta">${src} · ${r.created}${req ? ` · read ${req}×` : ''}</div>
+        </div>
+        <div class="rc-actions">
+          <button class="btn-dismiss" onclick="dismissRule(${r.id})">Dismiss</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state">Failed to load rules.</div>';
+  }
+}
+
+async function dismissRule(id) {
+  if (!confirm('Remove this rule and add to dismissed list?')) return;
+  try {
+    const res = await fetch(`/api/rules/${id}`, { method: 'DELETE' });
+    if (res.ok) loadRulesPage();
+  } catch(e) {}
+}
+
+document.getElementById('add-rule-btn').addEventListener('click', () => {
+  const form = document.getElementById('add-rule-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+});
+
+document.getElementById('rule-cancel-btn').addEventListener('click', () => {
+  document.getElementById('add-rule-form').style.display = 'none';
+});
+
+document.getElementById('rule-save-btn').addEventListener('click', async () => {
+  const category = document.getElementById('rule-category').value;
+  const title = document.getElementById('rule-title').value.trim();
+  const content = document.getElementById('rule-content').value.trim();
+  const wrong_approach = document.getElementById('rule-wrong').value.trim();
+  if (!title || !content) { alert('Title and content are required.'); return; }
+  try {
+    const res = await fetch('/api/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, title, content, wrong_approach }),
+    });
+    if (res.ok) {
+      document.getElementById('add-rule-form').style.display = 'none';
+      document.getElementById('rule-title').value = '';
+      document.getElementById('rule-content').value = '';
+      document.getElementById('rule-wrong').value = '';
+      loadRulesPage();
+    }
+  } catch(e) {}
+});
+
+// --- Conventions tab ---
+async function loadConventionsPage() {
+  const el = document.getElementById('conventions-content');
+  el.innerHTML = '<div class="empty-state">Loading…</div>';
+  try {
+    const res = await fetch('/api/semantic');
+    const sem = await res.json();
+    if (!sem || !Object.keys(sem).length) {
+      el.innerHTML = '<div class="empty-state">No conventions yet. Run winkers init to generate.</div>';
+      return;
+    }
+    let html = '';
+    if (sem.data_flow) {
+      html += `<div class="conv-section"><h3>Data Flow</h3><div class="conv-text">${escHtml(sem.data_flow)}</div></div>`;
+    }
+    if (sem.domain_context) {
+      html += `<div class="conv-section"><h3>Domain Context</h3><div class="conv-text">${escHtml(sem.domain_context)}</div></div>`;
+    }
+    if (sem.zone_intents && Object.keys(sem.zone_intents).length) {
+      const zones = Object.entries(sem.zone_intents).map(([name, z]) =>
+        `<div class="conv-zone">
+          <div class="cz-name">${escHtml(name)}</div>
+          <div class="cz-why">${escHtml(z.why || '')}</div>
+          ${z.wrong_approach ? `<div class="cz-wrong">✗ ${escHtml(z.wrong_approach)}</div>` : ''}
+        </div>`
+      ).join('');
+      html += `<div class="conv-section"><h3>Zone Intents</h3>${zones}</div>`;
+    }
+    if (sem.new_feature_checklist && sem.new_feature_checklist.length) {
+      const items = sem.new_feature_checklist.map(i => `<li>${escHtml(i)}</li>`).join('');
+      html += `<div class="conv-section"><h3>New Feature Checklist</h3><ul class="conv-checklist">${items}</ul></div>`;
+    }
+    el.innerHTML = html || '<div class="empty-state">No conventions data.</div>';
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Failed to load conventions.</div>';
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // Init

@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from winkers.cli.main import cli
 from winkers.graph import GraphBuilder
-from winkers.mcp.tools import _tool_map, _tool_scope
+from winkers.mcp.tools import _section_map, _tool_scope
 from winkers.resolver import CrossFileResolver
 from winkers.store import GraphStore
 
@@ -32,7 +32,7 @@ def test_e2e_python_init_map_scope(tmp_path):
     store.save(graph)
 
     # map
-    map_result = _tool_map(graph, {})
+    map_result = _section_map(graph, None, project)
     assert "zones" in map_result
     assert map_result["total_files"] >= 4
     assert map_result["total_functions"] >= 7
@@ -103,4 +103,4 @@ def test_e2e_typescript_full(tmp_path):
 
     scope_result = _tool_scope(graph, {"function": cp_id})
     assert scope_result["function"]["locked"] is True
-    assert "constraints" in scope_result
+    assert "callers_constraint" in scope_result

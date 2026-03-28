@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from winkers.conventions import RulesAudit, RulesFile, RulesStore
 
 from winkers.graph import GraphBuilder
 from winkers.resolver import CrossFileResolver
@@ -48,7 +52,9 @@ def cli():
 @click.argument("path", default=".", type=click.Path(exists=True))
 @click.option("--no-semantic", is_flag=True, default=False,
               help="Skip semantic enrichment (no Claude API call).")
-def init(path: str, no_semantic: bool):
+@click.option("--yes", "-y", is_flag=True, default=False,
+              help="Accept all proposed rule changes without interactive review.")
+def init(path: str, no_semantic: bool, yes: bool):
     """Build the dependency graph for the project.
 
     Automatically detects your IDE and registers the MCP server:
@@ -99,7 +105,7 @@ def init(path: str, no_semantic: bool):
     _run_debt_analysis(root, graph)
 
     if not no_semantic:
-        _run_semantic_enrichment(root, graph)
+        _run_semantic_enrichment(root, graph, yes=yes)
 
     _autodetect_ide(root)
 
@@ -201,8 +207,8 @@ def _load_dotenv(root: Path) -> None:
             os.environ[key] = value
 
 
-def _run_semantic_enrichment(root: Path, graph) -> None:
-    """One Claude API call -- generate architectural context for the project."""
+def _run_semantic_enrichment(root: Path, graph, yes: bool = False) -> None:
+    """One Claude API call -- generate architectural context and audit rules."""
     _load_dotenv(root)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -228,6 +234,18 @@ def _run_semantic_enrichment(root: Path, graph) -> None:
         )
         return
 
+    from winkers.conventions import (
+        DismissedStore,
+        RulesStore,
+        compile_overview,
+    )
+    from winkers.detectors import run_all_detectors
+
+    rules_store = RulesStore(root)
+    dismissed_store = DismissedStore(root)
+    rules_file = rules_store.load()
+    dismissed = dismissed_store.load()
+
     sem_store = SemanticStore(root)
     existing = sem_store.load()
 
@@ -237,7 +255,6 @@ def _run_semantic_enrichment(root: Path, graph) -> None:
         click.echo(f"  Skipping semantic: {e}")
         return
 
-    # Check if code changed since last enrichment
     insights_text = build_insights_prompt(root)
     has_new_insights = bool(insights_text)
 
@@ -248,23 +265,175 @@ def _run_semantic_enrichment(root: Path, graph) -> None:
     if has_new_insights:
         click.echo("  Including insights from past agent sessions.")
 
+    click.echo("  Running pattern detectors ...")
+    evidence = run_all_detectors(root)
+    if evidence:
+        click.echo(f"  Found {len(evidence)} detector pattern(s).")
+
     click.echo("  Generating semantic layer via Claude API ...")
 
     try:
-        result = enricher.enrich(graph, root, insights_text=insights_text)
+        result = enricher.enrich(
+            graph, root,
+            insights_text=insights_text,
+            existing_rules=rules_file.rules,
+            detector_evidence=evidence,
+            dismissed=dismissed,
+        )
     except RuntimeError as e:
         click.echo(f"  Semantic enrichment failed: {e}")
         return
 
-    sem_store.save(result)
-    tokens = result.meta.get("input_tokens", 0) + result.meta.get("output_tokens", 0)
-    secs = result.meta.get("duration_s", 0)
+    sem_store.save(result.layer)
+    tokens = result.layer.meta.get("input_tokens", 0) + result.layer.meta.get("output_tokens", 0)
+    secs = result.layer.meta.get("duration_s", 0)
     click.echo(
-        f"  [ok] Semantic: {len(result.zone_intents)} zones, "
-        f"{len(result.constraints)} constraints, "
-        f"{len(result.conventions)} conventions "
+        f"  [ok] Semantic: {len(result.layer.zone_intents)} zones "
         f"({tokens} tokens, {secs}s)"
     )
+
+    audit = result.rules_audit
+    if audit.is_empty():
+        return
+
+    filtered_audit, dis_adds, dis_removes, dis_updates = _interactive_review(audit, yes)
+
+    if dis_adds or dis_removes or dis_updates:
+        dismissed_store.merge(dis_adds, dis_removes, dis_updates)
+
+    if not filtered_audit.is_empty():
+        added, updated, removed = _apply_audit(rules_file, filtered_audit, rules_store)
+        rules_store.save(rules_file)
+        compile_overview(rules_file, rules_store.overview_path)
+        click.echo(f"  [ok] Rules: +{added} added, {updated} updated, {removed} removed")
+
+
+def _interactive_review(
+    audit: RulesAudit, yes: bool
+) -> tuple[RulesAudit, list, list[int], list[int]]:
+    """Show numbered list of proposed rule changes, let user skip items by ID.
+
+    Returns (filtered_audit, dismissed_adds, dismissed_remove_ids, dismissed_update_ids).
+    """
+    import sys
+
+    from winkers.conventions import RulesAudit
+
+    if yes or not sys.stdout.isatty():
+        return audit, [], [], []
+
+    # Build numbered display list
+    items: list[tuple[int, str, object]] = []  # (display_id, section, item)
+    idx = 1
+
+    if audit.add:
+        click.echo("\n  Rules to ADD:")
+        for r in audit.add:
+            click.echo(f"    {idx}. [{r.category}] {r.title} — {r.content[:70]}")
+            items.append((idx, "add", r))
+            idx += 1
+
+    if audit.update:
+        click.echo("\n  Rules to UPDATE:")
+        for r in audit.update:
+            click.echo(f"    {idx}. [#{r.id}] {r.content[:60]}  ({r.reason[:40]})")
+            items.append((idx, "update", r))
+            idx += 1
+
+    if audit.remove:
+        click.echo("\n  Rules to REMOVE:")
+        for r in audit.remove:
+            click.echo(f"    {idx}. [#{r.id}] {r.reason[:70]}")
+            items.append((idx, "remove", r))
+            idx += 1
+
+    raw = click.prompt(
+        "\n  Enter IDs to SKIP (comma-separated), or Enter to accept all",
+        default="",
+        show_default=False,
+    ).strip()
+
+    if not raw:
+        return audit, [], [], []
+
+    try:
+        skip_ids = {int(x.strip()) for x in raw.split(",") if x.strip()}
+    except ValueError:
+        click.echo("  Invalid input — accepting all changes.")
+        return audit, [], [], []
+
+    dismissed_adds = []
+    dismissed_removes: list[int] = []
+    dismissed_updates: list[int] = []
+    selected_add = []
+    selected_update = []
+    selected_remove = []
+
+    for display_id, section, item in items:
+        skipped = display_id in skip_ids
+        if section == "add":
+            if skipped:
+                dismissed_adds.append(item)
+            else:
+                selected_add.append(item)
+        elif section == "update":
+            if skipped:
+                dismissed_updates.append(item.id)
+            else:
+                selected_update.append(item)
+        elif section == "remove":
+            if skipped:
+                dismissed_removes.append(item.id)
+            else:
+                selected_remove.append(item)
+
+    filtered = RulesAudit(add=selected_add, update=selected_update, remove=selected_remove)
+    return filtered, dismissed_adds, dismissed_removes, dismissed_updates
+
+
+def _apply_audit(
+    rules_file: RulesFile, audit: RulesAudit, store: RulesStore
+) -> tuple[int, int, int]:
+    """Apply audit to rules_file in-place. Returns (added, updated, removed)."""
+    from datetime import date
+
+    from winkers.conventions import ConventionRule
+
+    today = date.today().isoformat()
+    added = 0
+    for item in audit.add:
+        rules_file.rules.append(ConventionRule(
+            id=store.next_id(rules_file),
+            category=item.category,
+            title=item.title,
+            content=item.content,
+            wrong_approach=item.wrong_approach,
+            affects=item.affects,
+            related=item.related,
+            source="semantic-agent",
+            created=today,
+        ))
+        added += 1
+
+    updated = 0
+    for item in audit.update:
+        for rule in rules_file.rules:
+            if rule.id == item.id:
+                if item.title:
+                    rule.title = item.title
+                if item.content:
+                    rule.content = item.content
+                if item.wrong_approach:
+                    rule.wrong_approach = item.wrong_approach
+                updated += 1
+                break
+
+    remove_ids = {item.id for item in audit.remove}
+    before = len(rules_file.rules)
+    rules_file.rules = [r for r in rules_file.rules if r.id not in remove_ids]
+    removed = before - len(rules_file.rules)
+
+    return added, updated, removed
 
 
 
@@ -527,7 +696,9 @@ def record(path: str, transcript: str | None, hook: bool, catch_up: bool):
     if hook:
         _record_from_hook(root)
     elif transcript:
+        from winkers.session_store import SessionStore
         _record_one(root, Path(transcript))
+        _update_rule_stats(root, SessionStore(root))
     elif catch_up:
         _record_catch_up(root)
     else:
@@ -560,6 +731,8 @@ def _record_from_hook(root: Path) -> None:
         return
 
     _record_one(root, Path(transcript_path))
+    from winkers.session_store import SessionStore
+    _update_rule_stats(root, SessionStore(root))
 
 
 def _record_one(root: Path, transcript_path: Path) -> None:
@@ -599,6 +772,31 @@ def _record_one(root: Path, transcript_path: Path) -> None:
 
 
 REDO_WARNING_FILE = ".winkers/redo_warning.md"
+
+
+def _update_rule_stats(root: Path, store) -> None:
+    """Recompute rule stats from all recorded sessions and save to rules.json."""
+    from winkers.conventions import RulesStore, RuleStats
+
+    rules_store = RulesStore(root)
+    if not rules_store.exists():
+        return
+    rules_file = rules_store.load()
+    if not rules_file.rules:
+        return
+
+    by_category = {r.category: r for r in rules_file.rules}
+    for rule in rules_file.rules:
+        rule.stats = RuleStats()
+
+    for scored in store.load_all():
+        for tc in scored.session.tool_calls:
+            if tc.name == "mcp__winkers__rule_read":
+                category = tc.input_params.get("category", "")
+                if category in by_category:
+                    by_category[category].stats.times_requested += 1
+
+    rules_store.save(rules_file)
 
 
 def _check_redo(root: Path, store, scored) -> None:
@@ -674,6 +872,7 @@ def _record_catch_up(root: Path) -> None:
         click.echo("All sessions already recorded.")
     else:
         click.echo(f"Recorded {new_count} new session(s).")
+        _update_rule_stats(root, store)
 
 
 @cli.command()

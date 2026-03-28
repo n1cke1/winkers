@@ -397,6 +397,70 @@ def create_app(root: Path) -> web.Application:
 
         return web.json_response(result)
 
+    async def handle_rules(request: web.Request) -> web.Response:
+        from winkers.conventions import RulesStore
+        rules_file = RulesStore(root).load()
+        return web.json_response([
+            {
+                "id": r.id,
+                "category": r.category,
+                "title": r.title,
+                "content": r.content,
+                "wrong_approach": r.wrong_approach,
+                "source": r.source,
+                "created": r.created,
+                "stats": r.stats.model_dump(),
+            }
+            for r in rules_file.rules
+        ])
+
+    async def handle_rules_dismiss(request: web.Request) -> web.Response:
+        from winkers.conventions import DismissedStore, RuleAdd, RulesStore
+        try:
+            rule_id = int(request.match_info["id"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "invalid id"}, status=400)
+        rules_store = RulesStore(root)
+        rules_file = rules_store.load()
+        rule = next((r for r in rules_file.rules if r.id == rule_id), None)
+        if rule is None:
+            return web.json_response({"error": "not found"}, status=404)
+        DismissedStore(root).merge(
+            [RuleAdd(category=rule.category, title=rule.title, content=rule.content)],
+            [], []
+        )
+        rules_file.rules = [r for r in rules_file.rules if r.id != rule_id]
+        rules_store.save(rules_file)
+        return web.json_response({"ok": True})
+
+    async def handle_rules_add(request: web.Request) -> web.Response:
+        from datetime import date
+
+        from winkers.conventions import ConventionRule, RulesStore
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json"}, status=400)
+        category = data.get("category", "").strip()
+        title = data.get("title", "").strip()
+        content = data.get("content", "").strip()
+        if not category or not title or not content:
+            return web.json_response({"error": "category, title, content required"}, status=400)
+        rules_store = RulesStore(root)
+        rules_file = rules_store.load()
+        rule = ConventionRule(
+            id=rules_store.next_id(rules_file),
+            category=category,
+            title=title,
+            content=content,
+            wrong_approach=data.get("wrong_approach", ""),
+            source="manual",
+            created=date.today().isoformat(),
+        )
+        rules_file.rules.append(rule)
+        rules_store.save(rules_file)
+        return web.json_response(rule.model_dump())
+
     async def handle_snapshot_graph(request: web.Request) -> web.Response:
         """Load a historical snapshot as Cytoscape graph."""
         filename = request.rel_url.query.get("file", "")
@@ -429,6 +493,9 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/sessions", handle_sessions)
     app.router.add_get("/api/insights", handle_insights)
     app.router.add_get("/api/tool-stats", handle_tool_stats)
+    app.router.add_get("/api/rules", handle_rules)
+    app.router.add_delete("/api/rules/{id}", handle_rules_dismiss)
+    app.router.add_post("/api/rules", handle_rules_add)
     app.router.add_get("/ws", handle_ws)
     return app
 
@@ -439,9 +506,9 @@ def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
         return []
 
     from winkers.mcp.tools import (
-        _tool_functions_graph,
-        _tool_hotspots,
-        _tool_map,
+        _section_functions_graph,
+        _section_hotspots,
+        _section_map,
         _tool_scope,
     )
 
@@ -450,12 +517,12 @@ def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
     def _chars_to_tokens(text: str) -> int:
         return len(text) // 4  # ~4 chars per token
 
-    # map()
+    # orient(include=["map"])
     try:
-        result = _tool_map(graph, {}, root)
+        result = _section_map(graph, None, root)
         tokens = _chars_to_tokens(json.dumps(result))
         estimates.append({
-            "name": "mcp__winkers__map",
+            "name": "mcp__winkers__orient",
             "calls": 0,
             "tokens_in": 0,
             "tokens_out": 0,
@@ -467,12 +534,12 @@ def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
     except Exception:
         pass
 
-    # functions_graph()
+    # orient(include=["functions_graph"])
     try:
-        result = _tool_functions_graph(graph)
+        result = _section_functions_graph(graph, None)
         tokens = _chars_to_tokens(json.dumps(result))
         estimates.append({
-            "name": "mcp__winkers__functions_graph",
+            "name": "mcp__winkers__orient_functions_graph",
             "calls": 0,
             "tokens_in": 0,
             "tokens_out": 0,
@@ -484,12 +551,12 @@ def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
     except Exception:
         pass
 
-    # hotspots()
+    # orient(include=["hotspots"])
     try:
-        result = _tool_hotspots(graph, {})
+        result = _section_hotspots(graph, 10)
         tokens = _chars_to_tokens(json.dumps(result))
         estimates.append({
-            "name": "mcp__winkers__hotspots",
+            "name": "mcp__winkers__orient_hotspots",
             "calls": 0,
             "tokens_in": 0,
             "tokens_out": 0,
@@ -505,7 +572,6 @@ def _estimate_mcp_tokens(graph, root: Path) -> list[dict]:
     try:
         fn_ids = list(graph.functions.keys())
         if fn_ids:
-            # Pick a median-complexity function
             by_callers = sorted(fn_ids, key=lambda f: len(graph.callers(f)))
             mid = by_callers[len(by_callers) // 2]
             result = _tool_scope(graph, {"function": mid}, root)
