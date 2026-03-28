@@ -11,7 +11,11 @@ from aiohttp import WSMsgType, web
 from winkers.store import GraphStore
 
 
-def _graph_to_cytoscape(graph, zone_filter: str | None = None) -> dict[str, Any]:
+def _graph_to_cytoscape(
+    graph,
+    zone_filter: str | None = None,
+    include_ui: bool = False,
+) -> dict[str, Any]:
     """Convert Graph to Cytoscape.js elements format."""
     from winkers.mcp.tools import _infer_zone
 
@@ -61,7 +65,74 @@ def _graph_to_cytoscape(graph, zone_filter: str | None = None) -> dict[str, Any]
             }
         })
 
+    if include_ui:
+        _add_ui_nodes(graph, fn_ids_in_zone, nodes, edges)
+
     return {"nodes": nodes, "edges": edges}
+
+
+def _add_ui_nodes(graph, fn_ids_in_zone: set[str], nodes: list, edges: list) -> None:
+    """Append UI layer nodes (templates + elements) and edges to Cytoscape lists."""
+    ui_map: dict = graph.meta.get("ui_map", {})
+    if not ui_map:
+        return
+
+    seen_templates: set[str] = set()
+    ui_edge_idx = 0
+
+    for route, info in ui_map.items():
+        fn_id = next(
+            (fid for fid, fn in graph.functions.items()
+             if fn.route == route and fid in fn_ids_in_zone),
+            None,
+        )
+        # If zone filter active and route handler not in zone, skip
+        if fn_ids_in_zone and fn_id is None:
+            continue
+
+        tpl_name = info.get("template", "")
+        tpl_id = f"ui::tpl::{tpl_name}"
+
+        if tpl_name not in seen_templates:
+            seen_templates.add(tpl_name)
+            nodes.append({"data": {
+                "id": tpl_id,
+                "label": tpl_name.split("/")[-1],
+                "layer": "ui",
+                "kind": "template",
+                "template": tpl_name,
+                "callers": 0,
+                "locked": False,
+            }})
+
+        if fn_id:
+            edges.append({"data": {
+                "id": f"ui-r-{ui_edge_idx}",
+                "source": fn_id,
+                "target": tpl_id,
+                "edge_kind": "renders",
+            }})
+            ui_edge_idx += 1
+
+        for el_idx, el in enumerate(info.get("elements", [])):
+            el_label = el.get("id") or el.get("data-tab") or el.get("text") or el["kind"]
+            el_id = f"ui::el::{tpl_name}::{el['kind']}::{el_idx}"
+            nodes.append({"data": {
+                "id": el_id,
+                "label": el_label[:20],
+                "layer": "ui",
+                "kind": el["kind"],
+                "template": tpl_name,
+                "callers": 0,
+                "locked": False,
+            }})
+            edges.append({"data": {
+                "id": f"ui-c-{ui_edge_idx}",
+                "source": tpl_id,
+                "target": el_id,
+                "edge_kind": "contains",
+            }})
+            ui_edge_idx += 1
 
 
 def _preview(graph, fn_id: str) -> dict[str, Any]:
@@ -142,6 +213,16 @@ def _history(root: Path) -> list[dict]:
             added_files = [f for f in files if f not in prev_files]
             removed_files = [f for f in prev_files if f not in files]
 
+            ui_map = data.get("meta", {}).get("ui_map", {})
+            prev_ui_map = prev_data.get("meta", {}).get("ui_map", {})
+            added_ui = [r for r in ui_map if r not in prev_ui_map]
+            removed_ui = [r for r in prev_ui_map if r not in ui_map]
+            ui_element_delta = sum(
+                len(v.get("elements", [])) for v in ui_map.values()
+            ) - sum(
+                len(v.get("elements", [])) for v in prev_ui_map.values()
+            )
+
             entry["diff"] = {
                 "functions_delta": fn_count - len(prev_fns),
                 "edges_delta": edge_count - len(prev_edges),
@@ -151,6 +232,9 @@ def _history(root: Path) -> list[dict]:
                 "removed_functions": removed_fns[:10],
                 "added_files": added_files,
                 "removed_files": removed_files,
+                "added_ui_routes": added_ui,
+                "removed_ui_routes": removed_ui,
+                "ui_elements_delta": ui_element_delta,
             }
 
         prev_data = data
@@ -228,7 +312,8 @@ def create_app(root: Path) -> web.Application:
         if graph is None:
             return web.json_response({"error": "Graph not initialized"}, status=404)
         zone = request.rel_url.query.get("zone")
-        return web.json_response(_graph_to_cytoscape(graph, zone))
+        include_ui = request.rel_url.query.get("ui") == "1"
+        return web.json_response(_graph_to_cytoscape(graph, zone, include_ui))
 
     async def handle_preview(request: web.Request) -> web.Response:
         graph = store.load()
@@ -513,7 +598,8 @@ def create_app(root: Path) -> web.Application:
             data = json.loads(snap_path.read_text(encoding="utf-8"))
             snap_graph = Graph.model_validate(data)
             zone = request.rel_url.query.get("zone")
-            return web.json_response(_graph_to_cytoscape(snap_graph, zone))
+            include_ui = request.rel_url.query.get("ui") == "1"
+            return web.json_response(_graph_to_cytoscape(snap_graph, zone, include_ui))
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 

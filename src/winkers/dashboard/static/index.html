@@ -246,6 +246,7 @@
     <button id="fit-btn">Fit</button>
     <button id="preview-btn">Preview</button>
     <button id="debt-btn">Tech Debt</button>
+    <button id="ui-btn">UI Map</button>
     <button id="history-btn">History</button>
     <select id="session-select"><option value="">Commit overlay</option></select>
   </div>
@@ -451,8 +452,11 @@ let debtMode = false;
 let debtData = null;
 let ctxTarget = null;
 
+let showUI = false;
+
 async function loadGraph(zone = '') {
-  const url = zone ? `/api/graph?zone=${encodeURIComponent(zone)}` : '/api/graph';
+  let url = zone ? `/api/graph?zone=${encodeURIComponent(zone)}` : '/api/graph';
+  if (showUI) url += (url.includes('?') ? '&' : '?') + 'ui=1';
   const res = await fetch(url);
   if (!res.ok) { toast('Graph not loaded. Run winkers init first.'); return; }
   graphData = await res.json();
@@ -468,7 +472,16 @@ function buildZoneColors(nodes) {
   zones.forEach((z, i) => { zoneColorMap[z] = ZONE_COLORS[i % ZONE_COLORS.length]; });
 }
 
+const UI_NODE_COLORS = {
+  template: '#0ea5e9',
+  panel:    '#f59e0b',
+  table:    '#10b981',
+  form:     '#f97316',
+  tab:      '#8b5cf6',
+};
+
 function nodeColor(data) {
+  if (data.layer === 'ui') return UI_NODE_COLORS[data.kind] || '#94a3b8';
   if (data.is_async) return '#a78bfa';
   return zoneColorMap[data.zone] || '#6366f1';
 }
@@ -538,6 +551,49 @@ function renderGraph(data) {
       {
         selector: '.preview-edge',
         style: { 'line-color': '#3b82f6', 'target-arrow-color': '#3b82f6' }
+      },
+      {
+        selector: 'node[layer = "ui"][kind = "template"]',
+        style: {
+          'shape': 'rectangle',
+          'background-color': '#0ea5e9',
+          'border-width': 2,
+          'border-color': '#7dd3fc',
+          'font-size': 9,
+          'width': 80,
+          'height': 28,
+        }
+      },
+      {
+        selector: 'node[layer = "ui"][kind != "template"]',
+        style: {
+          'shape': 'round-rectangle',
+          'background-color': n => UI_NODE_COLORS[n.data('kind')] || '#94a3b8',
+          'border-width': 0,
+          'font-size': 8,
+          'width': 60,
+          'height': 22,
+        }
+      },
+      {
+        selector: 'edge[edge_kind = "renders"]',
+        style: {
+          'line-color': '#22c55e',
+          'target-arrow-color': '#22c55e',
+          'line-style': 'dashed',
+          'width': 1.5,
+          'opacity': 0.8,
+        }
+      },
+      {
+        selector: 'edge[edge_kind = "contains"]',
+        style: {
+          'line-color': '#64748b',
+          'target-arrow-color': '#64748b',
+          'line-style': 'dotted',
+          'width': 1,
+          'opacity': 0.5,
+        }
       },
     ],
     layout: { name: 'cose', animate: false, randomize: false },
@@ -854,6 +910,15 @@ document.getElementById('history-btn').onclick = async function() {
         if (d.removed_functions?.length) {
           diffHtml += `<div class="snap-fns" style="color:#fca5a5">- ${d.removed_functions.map(f => f.split('::').pop()).join(', ')}</div>`;
         }
+        if (d.added_ui_routes?.length) {
+          diffHtml += `<div class="snap-fns" style="color:#0ea5e9">+ UI: ${d.added_ui_routes.join(', ')}</div>`;
+        }
+        if (d.removed_ui_routes?.length) {
+          diffHtml += `<div class="snap-fns" style="color:#7dd3fc;opacity:0.7">- UI: ${d.removed_ui_routes.join(', ')}</div>`;
+        }
+        if (d.ui_elements_delta && d.ui_elements_delta !== 0) {
+          diffHtml += `<div class="snap-fns" style="color:#64748b">${fmtDelta('ui elements', d.ui_elements_delta)}</div>`;
+        }
       }
       let commitsHtml = '';
       if (s.commits?.length) {
@@ -884,7 +949,9 @@ document.getElementById('history-btn').onclick = async function() {
 let viewingSnapshot = false;
 
 async function loadSnapshotGraph(file) {
-  const res = await fetch(`/api/snapshot-graph?file=${encodeURIComponent(file)}`);
+  let snapUrl = `/api/snapshot-graph?file=${encodeURIComponent(file)}`;
+  if (showUI) snapUrl += '&ui=1';
+  const res = await fetch(snapUrl);
   if (!res.ok) { toast('Could not load snapshot'); return; }
   const data = await res.json();
   buildZoneColors(data.nodes);
@@ -970,6 +1037,12 @@ document.getElementById('modal-overlay').onclick = () => {
 };
 
 // Tech Debt layer
+document.getElementById('ui-btn').onclick = function() {
+  showUI = !showUI;
+  this.classList.toggle('active', showUI);
+  loadGraph(document.getElementById('zone-filter').value);
+};
+
 document.getElementById('debt-btn').onclick = async function() {
   if (debtMode) {
     clearDebtLayer();
