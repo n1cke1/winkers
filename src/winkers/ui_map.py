@@ -86,7 +86,9 @@ def scan_templates(root: Path) -> dict[str, list[dict]]:
     return result
 
 
-def _find_elements(tpl_name: str, source_file: str, template_map: dict[str, list[dict]]) -> list[dict]:
+def _find_elements(
+    tpl_name: str, source_file: str, template_map: dict[str, list[dict]],
+) -> list[dict]:
     """Find template elements by searching for the closest match to tpl_name."""
     # 1. Exact match
     if tpl_name in template_map:
