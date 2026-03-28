@@ -1,5 +1,5 @@
-from app.utils.errors import api_error
-from app.utils.dates import parse_date
+from app.utils.dates import parse_date  # noqa: F401
+from app.utils.errors import api_error  # noqa: F401
 
 
 def login_required(fn):

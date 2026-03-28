@@ -1113,7 +1113,9 @@ def conventions_migrate(path: str, yes: bool):
             entries.extend(str(v) for v in val if v)
 
     if not entries:
-        click.echo("semantic.json has no 'conventions' or 'constraints' fields. Nothing to migrate.")
+        click.echo(
+            "semantic.json has no 'conventions' or 'constraints' fields. Nothing to migrate."
+        )
         return
 
     click.echo(f"Found {len(entries)} entries in semantic.json to migrate.\n")

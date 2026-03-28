@@ -1,6 +1,6 @@
 from app.routes.users import login_required
-from app.utils.errors import api_error
 from app.utils.dates import parse_date
+from app.utils.errors import api_error  # noqa: F401
 
 
 @login_required
