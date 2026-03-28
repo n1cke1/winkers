@@ -67,3 +67,33 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/typescript_project/` — src/pricing.ts, src/inventory.ts, src/api/prices.ts
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
+
+<!-- winkers-snippet-version: 0.7.4 -->
+## Architectural context (Winkers)
+
+This project uses [Winkers](https://github.com/nicholasgasior/winkers) for
+function-level dependency tracking. MCP server `winkers` is connected.
+
+### Before modifying code
+
+1. `orient(["map","conventions"])` — project structure, zones, hotspots, data flow, zone intents. **Call first.**
+2. `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
+3. `orient(["rules_list"])` — available coding rule categories; then `rule_read("<category>")` for details.
+
+### After modifying code
+
+- `scope(function="<name>")` — verify callers are not broken by your change.
+
+### Key concepts
+
+- **locked** = function has callers depending on its signature. Do not change
+  param types, order, or return type without updating all callers.
+- **free** = no callers. Modify freely.
+
+### Other tools
+
+- `orient(["functions_graph"])` — full indexed function list with caller counts.
+- `orient(["routes"])` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
+- `orient(["ui_map"])` — Flask route→template links with UI elements (panels, tables, forms, headings).
+- `orient(["hotspots"])` — functions with many callers; high-impact changes.
+- `convention_read("<zone>")` — zone intent details (e.g. "app.py", "data_flow", "checklist").
