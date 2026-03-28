@@ -1,8 +1,6 @@
-"""Tests for conventions data model, RulesStore, compile_overview, TraceLogger."""
+"""Tests for conventions data model, RulesStore, compile_overview."""
 
 from __future__ import annotations
-
-import json
 
 from winkers.conventions import (
     ConventionRule,
@@ -13,7 +11,6 @@ from winkers.conventions import (
     RulesFile,
     RulesStore,
     RuleStats,
-    TraceLogger,
     compile_overview,
 )
 
@@ -153,47 +150,6 @@ def test_compile_overview_sorted(tmp_path):
     lines = [ln for ln in out.read_text().splitlines() if ln.startswith("- ")]
     assert lines[0].startswith("- architecture")
     assert lines[1].startswith("- validation")
-
-
-# ---------------------------------------------------------------------------
-# TraceLogger
-# ---------------------------------------------------------------------------
-
-def test_trace_logger_writes_jsonl(tmp_path):
-    logger = TraceLogger(tmp_path, "session-abc123")
-    logger.log({"event": "orient", "topics_returned": ["models", "errors"]})
-    logger.log({"event": "rule_read", "topic": "models", "rule_id": 1})
-
-    traces_dir = tmp_path / ".winkers" / "rules" / "traces"
-    files = list(traces_dir.glob("*.jsonl"))
-    assert len(files) == 1
-
-    lines = files[0].read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 2
-
-    first = json.loads(lines[0])
-    assert first["event"] == "orient"
-    assert "timestamp" in first
-    assert first["topics_returned"] == ["models", "errors"]
-
-
-def test_trace_logger_appends(tmp_path):
-    logger = TraceLogger(tmp_path, "session-xyz")
-    logger.log({"event": "orient"})
-    logger.log({"event": "rule_read", "topic": "errors", "rule_id": 2})
-
-    traces_dir = tmp_path / ".winkers" / "rules" / "traces"
-    files = list(traces_dir.glob("*.jsonl"))
-    lines = files[0].read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 2
-
-
-def test_trace_logger_session_in_filename(tmp_path):
-    logger = TraceLogger(tmp_path, "my-session-id")
-    logger.log({"event": "orient"})
-    traces_dir = tmp_path / ".winkers" / "rules" / "traces"
-    files = list(traces_dir.glob("*.jsonl"))
-    assert "my-session-id" in files[0].name
 
 
 # ---------------------------------------------------------------------------

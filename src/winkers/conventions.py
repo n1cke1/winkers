@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -15,7 +14,6 @@ from winkers.store import STORE_DIR
 RULES_DIR = "rules"
 RULES_FILE = "rules.json"
 OVERVIEW_FILE = "overview.md"
-TRACES_DIR = "traces"
 
 RuleSource = Literal["semantic-agent", "auto-detected", "manual", "migrated-from-semantic"]
 
@@ -125,7 +123,6 @@ class RulesStore:
         self.rules_dir = root / STORE_DIR / RULES_DIR
         self.rules_path = self.rules_dir / RULES_FILE
         self.overview_path = self.rules_dir / OVERVIEW_FILE
-        self.traces_dir = self.rules_dir / TRACES_DIR
 
     def load(self) -> RulesFile:
         if not self.rules_path.exists():
@@ -204,24 +201,6 @@ def compile_overview(rules_file: RulesFile, path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Trace logger
-# ---------------------------------------------------------------------------
-
-class TraceLogger:
-    def __init__(self, root: Path, session_id: str) -> None:
-        traces_dir = root / STORE_DIR / RULES_DIR / TRACES_DIR
-        traces_dir.mkdir(parents=True, exist_ok=True)
-        today = date.today().isoformat()
-        self._path = traces_dir / f"{today}_{session_id}.jsonl"
-
-    def log(self, event: dict[str, Any]) -> None:
-        from datetime import datetime
-        entry = {"timestamp": datetime.now(UTC).isoformat(), **event}
-        with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
 
 
 # ---------------------------------------------------------------------------
