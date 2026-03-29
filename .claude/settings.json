@@ -6,7 +6,14 @@
       "Bash(gh run:*)",
       "Bash(gh issue:*)",
       "Bash(.venv/Scripts/pytest tests/ -v -x -k \"init or install or claude\")",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Read(//c/Users/NP/.ssh/**)",
+      "Bash(ssh -o StrictHostKeyChecking=no root@38.180.18.234 \"echo OK\")",
+      "Bash(ssh root@38.180.18.234 \"code tunnel --accept-server-license-terms 2>&1 &\")",
+      "Bash(ssh -t root@38.180.18.234 \"timeout 10 code tunnel --accept-server-license-terms 2>&1 || true\")",
+      "Bash(ssh root@38.180.18.234 \"code tunnel status 2>&1; code tunnel rename winkers-vps 2>&1 || true\")",
+      "Bash(ssh root@38.180.18.234:*)",
+      "Bash(ssh -t root@38.180.18.234 \"timeout 15 claude login 2>&1\")"
     ]
   },
   "hooks": {
