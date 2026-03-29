@@ -123,6 +123,7 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool):
         f"{len(graph.call_edges)} call edges. ({graph.meta.get('parse_time_ms', 0):.0f} ms)"
     )
 
+    _repair_sessions(root)
     _run_debt_analysis(root, graph)
 
     if not no_semantic:
@@ -170,6 +171,43 @@ def _collect_git_history(root: Path, graph) -> None:
 
     if count:
         click.echo(f"  [ok] Git history: {count} files with commits")
+
+
+def _repair_sessions(root: Path) -> None:
+    """Fix mojibake in commit messages caused by missing encoding='utf-8'."""
+    import json
+
+    sessions_dir = root / ".winkers" / "sessions"
+    if not sessions_dir.exists():
+        return
+
+    fixed = 0
+    for path in sessions_dir.glob("*.json"):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        msg = data.get("commit", {}).get("message")
+        if not msg:
+            continue
+
+        try:
+            repaired = msg.encode("cp1251").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+
+        if repaired != msg:
+            data["commit"]["message"] = repaired
+            path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            fixed += 1
+
+    if fixed:
+        click.echo(f"  [ok] Repaired {fixed} session(s) with garbled commit messages")
 
 
 MAX_SNAPSHOTS = 20
