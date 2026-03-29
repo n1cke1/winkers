@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -160,26 +158,17 @@ def _history(root: Path) -> list[dict]:
 
 def _enrich_with_git_commits(root: Path, snapshots: list[dict]) -> None:
     """Add git commits between consecutive snapshots."""
-    try:
-        kwargs: dict[str, Any] = {
-            "capture_output": True, "text": True,
-            "cwd": str(root), "timeout": 10,
-        }
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        result = subprocess.run(
-            ["git", "log", "-50", "--pretty=format:%H|%ad|%s",
-             "--date=iso-strict"],
-            **kwargs,
-        )
-    except Exception:
-        return
+    from winkers.git import run_git
 
-    if result.returncode != 0:
+    stdout = run_git(
+        ["log", "-50", "--pretty=format:%H|%ad|%s", "--date=iso-strict"],
+        cwd=root,
+    )
+    if not stdout:
         return
 
     commits = []
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         parts = line.split("|", 2)
         if len(parts) == 3:
             commits.append({

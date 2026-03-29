@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from winkers.conventions import RulesAudit, RulesFile, RulesStore
 
 from winkers import __version__
+from winkers.git import AUTO_COMMIT_MARKER
 from winkers.graph import GraphBuilder
 from winkers.resolver import CrossFileResolver
 from winkers.store import GraphStore
@@ -132,33 +133,21 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool):
 
 def _collect_git_history(root: Path, graph) -> None:
     """Collect recent git commits per file and store in graph."""
-    import subprocess
-    import sys
+    from winkers.git import run_git
 
-    try:
-        kwargs: dict = {
-            "capture_output": True, "text": True,
-            "cwd": str(root), "timeout": 15,
-        }
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-        result = subprocess.run(
-            ["git", "log", "-20", "--pretty=format:%H|%an|%ad|%s",
-             "--date=short", "--name-only"],
-            **kwargs,
-        )
-    except Exception:
-        return
-
-    if result.returncode != 0:
+    stdout = run_git(
+        ["log", "-20", "--pretty=format:%H|%an|%ad|%s",
+         "--date=short", "--name-only"],
+        cwd=root, timeout=15,
+    )
+    if not stdout:
         return
 
     # Parse: commit lines alternate with file lists
     commits_by_file: dict[str, list[dict]] = {}
     current_commit: dict | None = None
 
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         if "|" in line and len(line.split("|", 3)) == 4:
             sha, author, date, message = line.split("|", 3)
             current_commit = {
@@ -672,7 +661,7 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
         " --no-verify"
     )
     autocommit_exists = any(
-        "auto-commit" in hook.get("command", "")
+        AUTO_COMMIT_MARKER in hook.get("command", "")
         for entry in session_end
         for hook in entry.get("hooks", [])
     )

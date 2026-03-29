@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from winkers.git import AUTO_COMMIT_MARKER, run_git
 from winkers.models import (
     CommitBinding,
     DebtDelta,
@@ -47,20 +47,20 @@ def bind_to_commit(session: SessionRecord, project_path: Path) -> CommitBinding:
     after = (start - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     before = (end + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
-    try:
-        result = subprocess.run(
-            ["git", "log", f"--after={after}", f"--before={before}",
-             "--format=%H|%s", "--no-merges"],
-            cwd=str(project_path), capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    stdout = run_git(
+        ["log", f"--after={after}", f"--before={before}",
+         "--format=%H|%s", "--no-merges"],
+        cwd=project_path,
+    )
+    if not stdout or not stdout.strip():
         return CommitBinding(status="uncommitted")
 
-    if result.returncode != 0 or not result.stdout.strip():
-        return CommitBinding(status="uncommitted")
-
-    # Take the most recent commit
-    first_line = result.stdout.strip().splitlines()[0]
+    # Prefer a meaningful commit over auto-commits (wip: auto-commit ...)
+    lines = stdout.strip().splitlines()
+    first_line = next(
+        (l for l in lines if AUTO_COMMIT_MARKER not in l.split("|", 1)[-1]),
+        lines[0],  # all auto-commits — still better than "uncommitted"
+    )
     parts = first_line.split("|", 1)
     commit_hash = parts[0]
     commit_msg = parts[1] if len(parts) > 1 else ""
@@ -85,18 +85,17 @@ def bind_to_commit(session: SessionRecord, project_path: Path) -> CommitBinding:
 
 def _diff_stat(project_path: Path, commit_hash: str) -> tuple[list[str], int, int]:
     """Get files changed, insertions, deletions for a commit."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--stat", "--numstat", f"{commit_hash}~1", commit_hash],
-            cwd=str(project_path), capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    stdout = run_git(
+        ["diff", "--stat", "--numstat", f"{commit_hash}~1", commit_hash],
+        cwd=project_path,
+    )
+    if not stdout:
         return [], 0, 0
 
     files: list[str] = []
     total_ins = 0
     total_del = 0
-    for line in result.stdout.strip().splitlines():
+    for line in stdout.strip().splitlines():
         parts = line.split("\t")
         if len(parts) == 3:
             try:
@@ -112,36 +111,28 @@ def _diff_stat(project_path: Path, commit_hash: str) -> tuple[list[str], int, in
 
 def _is_reverted(project_path: Path, commit_hash: str) -> bool:
     """Check if a commit was later reverted (simple heuristic)."""
-    try:
-        result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", f"Revert.*{commit_hash[:7]}",
-             "-1"],
-            cwd=str(project_path), capture_output=True, text=True, timeout=10,
-        )
-        return bool(result.stdout.strip())
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    stdout = run_git(
+        ["log", "--oneline", "--grep", f"Revert.*{commit_hash[:7]}", "-1"],
+        cwd=project_path,
+    )
+    return bool(stdout and stdout.strip())
 
 
 def _find_modified_functions(
     project_path: Path, commit_hash: str, graph: Graph,
 ) -> list[str]:
     """Find function IDs whose line ranges overlap with changed lines."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--unified=0", f"{commit_hash}~1", commit_hash],
-            cwd=str(project_path), capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
-
-    if result.returncode != 0:
+    stdout = run_git(
+        ["diff", "--unified=0", f"{commit_hash}~1", commit_hash],
+        cwd=project_path,
+    )
+    if not stdout:
         return []
 
     # Parse unified diff to get changed lines per file
     changed: dict[str, set[int]] = {}
     current_file = ""
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         if line.startswith("+++ b/"):
             current_file = line[6:]
         elif line.startswith("@@ ") and current_file:
