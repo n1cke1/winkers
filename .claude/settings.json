@@ -4,7 +4,8 @@
       "mcp__winkers__*",
       "Bash(.venv/Scripts/python -c \":*)",
       "Bash(gh run:*)",
-      "Bash(gh issue:*)"
+      "Bash(gh issue:*)",
+      "Bash(.venv/Scripts/pytest tests/ -v -x -k \"init or install or claude\")"
     ]
   },
   "hooks": {
