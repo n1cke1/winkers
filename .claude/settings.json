@@ -5,7 +5,8 @@
       "Bash(.venv/Scripts/python -c \":*)",
       "Bash(gh run:*)",
       "Bash(gh issue:*)",
-      "Bash(.venv/Scripts/pytest tests/ -v -x -k \"init or install or claude\")"
+      "Bash(.venv/Scripts/pytest tests/ -v -x -k \"init or install or claude\")",
+      "Bash(gh api:*)"
     ]
   },
   "hooks": {
