@@ -46,18 +46,21 @@ def test_help_shows_commands():
 
 
 def test_init_autodetects_claude_code(project: Path):
-    """If .claude/ exists, init auto-registers MCP config in user scope."""
+    """If .claude/ exists, init creates .mcp.json and session hooks."""
     (project / ".claude").mkdir()
     runner = CliRunner()
     result = runner.invoke(cli, ["init", str(project)])
     assert result.exit_code == 0, result.output
-    # MCP config goes to ~/.claude.json (user scope only)
-    claude_json = Path.home() / ".claude.json"
-    assert claude_json.exists()
+    # MCP config goes to project-level .mcp.json (portable)
+    mcp_json = project / ".mcp.json"
+    assert mcp_json.exists()
+    import json as _json
+    mcp_data = _json.loads(mcp_json.read_text(encoding="utf-8"))
+    assert mcp_data["mcpServers"]["winkers"]["command"] == "uvx"
+    assert mcp_data["mcpServers"]["winkers"]["args"] == ["winkers", "serve", "."]
     # Project-level settings.json has SessionEnd hook
     proj_settings = project / ".claude" / "settings.json"
     assert proj_settings.exists()
-    import json as _json
     data = _json.loads(proj_settings.read_text(encoding="utf-8"))
     assert "SessionEnd" in data.get("hooks", {})
 

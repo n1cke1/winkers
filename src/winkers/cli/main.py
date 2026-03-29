@@ -560,34 +560,45 @@ def _templates_dir() -> Path:
 def _install_claude_code(root: Path) -> None:
     import shutil as _shutil
 
-    # Remove old project-level MCP config if it exists
-    old_settings = root / ".claude" / "settings.json"
-    if old_settings.exists():
-        old_settings.unlink()
-        click.echo("  [ok] Removed old project-level .claude/settings.json")
-
-    # MCP settings -- user scope only (~/.claude.json)
-    claude_json = Path.home() / ".claude.json"
-    settings: dict = {}
-    if claude_json.exists():
-        import json as _json
-        try:
-            settings = _json.loads(claude_json.read_text(encoding="utf-8"))
-        except Exception:
-            settings = {}
-    winkers_bin = _shutil.which("winkers") or "winkers"
-    settings.setdefault("mcpServers", {})["winkers"] = {
-        "command": winkers_bin,
-        "args": ["serve", str(root)],
-        "type": "stdio",
+    # --- Project-level .mcp.json (portable, works after clone) ---
+    mcp_json = root / ".mcp.json"
+    mcp_config = {
+        "mcpServers": {
+            "winkers": {
+                "command": "uvx",
+                "args": ["winkers", "serve", "."],
+                "type": "stdio",
+            }
+        }
     }
-    claude_json.write_text(
-        json.dumps(settings, indent=2), encoding="utf-8"
-    )
-    click.echo(f"  [ok] MCP server registered (user scope): {claude_json}")
+    mcp_json.write_text(json.dumps(mcp_config, indent=2) + "\n", encoding="utf-8")
+    click.echo(f"  [ok] MCP server registered (project): {mcp_json}")
 
+    # --- Clean up old user-scope registration if present ---
+    _remove_user_scope_mcp()
+
+    winkers_bin = _shutil.which("winkers") or "winkers"
     _install_session_hook(root, winkers_bin)
     _install_claude_md_snippet(root)
+
+
+def _remove_user_scope_mcp() -> None:
+    """Remove stale winkers entry from ~/.claude.json (migrated to .mcp.json)."""
+    claude_json = Path.home() / ".claude.json"
+    if not claude_json.exists():
+        return
+    try:
+        settings = json.loads(claude_json.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    servers = settings.get("mcpServers", {})
+    if "winkers" not in servers:
+        return
+    del servers["winkers"]
+    if not servers:
+        settings.pop("mcpServers", None)
+    claude_json.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    click.echo(f"  [ok] Removed old user-scope MCP entry from {claude_json}")
 
 
 WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
