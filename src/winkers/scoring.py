@@ -58,7 +58,7 @@ def bind_to_commit(session: SessionRecord, project_path: Path) -> CommitBinding:
     # Prefer a meaningful commit over auto-commits (wip: auto-commit ...)
     lines = stdout.strip().splitlines()
     first_line = next(
-        (l for l in lines if AUTO_COMMIT_MARKER not in l.split("|", 1)[-1]),
+        (line for line in lines if AUTO_COMMIT_MARKER not in line.split("|", 1)[-1]),
         lines[0],  # all auto-commits — still better than "uncommitted"
     )
     parts = first_line.split("|", 1)
