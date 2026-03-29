@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 AUTO_COMMIT_MARKER = "auto-commit"
 """Substring used to detect auto-commit messages (shared with CLI hook)."""
 
