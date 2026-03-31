@@ -83,6 +83,11 @@ class Graph(BaseModel):
         locked_ids = {e.target_fn for e in self.call_edges}
         return [fn for fn in self.functions.values() if fn.id in locked_ids]
 
+    def file_zone(self, path: str) -> str:
+        """Return zone for a file path from stored FileNode."""
+        fnode = self.files.get(path)
+        return fnode.zone if fnode and fnode.zone else "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Session recording models

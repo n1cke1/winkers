@@ -166,27 +166,63 @@ def _load_rules(root: Path):
     return RulesStore(root).load()
 
 
+MAX_ORIENT_TOKENS = 2000
+
+# Priority order: most important sections first for truncation.
+_SECTION_PRIORITY = [
+    "map", "conventions", "rules_list", "hotspots",
+    "routes", "ui_map", "functions_graph",
+]
+
+
+def _estimate_tokens(data: Any) -> int:
+    """Rough token count: ~4 chars per token in JSON output."""
+    import json
+    return len(json.dumps(data, default=str)) // 4
+
+
 def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     include = args.get("include", [])
-
     zone = args.get("zone")
     min_callers = args.get("min_callers", 10)
-    result: dict[str, Any] = {}
+    max_tokens = args.get("max_tokens", MAX_ORIENT_TOKENS)
 
-    if "map" in include:
-        result["map"] = _section_map(graph, zone, root)
-    if "functions_graph" in include:
-        result["functions_graph"] = _section_functions_graph(graph, zone)
-    if "conventions" in include:
-        result["conventions"] = _section_conventions(root)
-    if "rules_list" in include:
-        result["rules_list"] = _section_rules_list(root)
-    if "hotspots" in include:
-        result["hotspots"] = _section_hotspots(graph, min_callers)
-    if "routes" in include:
-        result["routes"] = _section_routes(graph, zone)
-    if "ui_map" in include:
-        result["ui_map"] = _section_ui_map(graph, zone)
+    builders: dict[str, Any] = {
+        "map": lambda: _section_map(graph, zone, root),
+        "functions_graph": lambda: _section_functions_graph(graph, zone),
+        "conventions": lambda: _section_conventions(root),
+        "rules_list": lambda: _section_rules_list(root),
+        "hotspots": lambda: _section_hotspots(graph, min_callers),
+        "routes": lambda: _section_routes(graph, zone),
+        "ui_map": lambda: _section_ui_map(graph, zone),
+    }
+
+    # Process sections in priority order (only those requested).
+    ordered = [s for s in _SECTION_PRIORITY if s in include]
+
+    result: dict[str, Any] = {}
+    used_tokens = 0
+    skipped: list[str] = []
+
+    for section in ordered:
+        build = builders.get(section)
+        if build is None:
+            continue
+        data = build()
+        section_tokens = _estimate_tokens(data)
+        if used_tokens + section_tokens > max_tokens and result:
+            skipped.append(section)
+            continue
+        result[section] = data
+        used_tokens += section_tokens
+
+    if skipped:
+        result["_truncated"] = True
+        result["_hint"] = (
+            f"Response truncated at ~{max_tokens} token budget. "
+            f"Skipped: {', '.join(skipped)}. "
+            "Call orient() with fewer includes or filter by zone."
+        )
 
     if not result:
         result["error"] = (
@@ -197,9 +233,12 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
 
 
 def _section_map(graph: Graph, zone_filter: str | None, root: Path) -> dict:
+    from winkers.protect import load_startup_chain
+    startup_chain = load_startup_chain(root)
+
     zones: dict[str, list[str]] = {}
     for f in graph.files.values():
-        z = f.zone or _infer_zone(f.path)
+        z = f.zone or "unknown"
         zones.setdefault(z, []).append(f.path)
 
     if zone_filter:
@@ -225,6 +264,9 @@ def _section_map(graph: Graph, zone_filter: str | None, root: Path) -> dict:
         )
         if route_count:
             entry["routes_count"] = route_count
+        protected_count = sum(1 for f in files if f in startup_chain)
+        if protected_count:
+            entry["startup_chain"] = protected_count
         if semantic and z in semantic.zone_intents:
             intent = semantic.zone_intents[z]
             entry["intent"] = {"why": intent.why, "wrong_approach": intent.wrong_approach}
@@ -246,7 +288,7 @@ def _section_functions_graph(graph: Graph, zone_filter: str | None) -> dict:
     fn_ids = sorted(graph.functions.keys())
     if zone_filter:
         fn_ids = [fid for fid in fn_ids
-                  if _infer_zone(graph.functions[fid].file) == zone_filter]
+                  if graph.file_zone(graph.functions[fid].file) == zone_filter]
 
     id_to_idx: dict[str, int] = {fid: i + 1 for i, fid in enumerate(fn_ids)}
     caller_map: dict[str, list[str]] = {}
@@ -348,7 +390,7 @@ def _section_routes(graph: Graph, zone_filter: str | None) -> dict:
     for fn in graph.functions.values():
         if not fn.route:
             continue
-        if zone_filter and _infer_zone(fn.file) != zone_filter:
+        if zone_filter and graph.file_zone(fn.file) != zone_filter:
             continue
         callees = [e.target_fn.split("::")[-1] for e in graph.callees(fn.id)]
         entry: dict = {
@@ -376,7 +418,7 @@ def _section_ui_map(graph: Graph, zone_filter: str | None) -> dict:
     if zone_filter:
         raw = {
             path: data for path, data in raw.items()
-            if _infer_zone(data.get("file", "")) == zone_filter
+            if graph.file_zone(data.get("file", "")) == zone_filter
         }
     return {"count": len(raw), "routes": raw}
 
@@ -393,7 +435,7 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
         caller_edges = graph.callers(fn.id)
         callee_edges = graph.callees(fn.id)
 
-        return {
+        result = {
             "function": {
                 "id": fn.id,
                 "file": fn.file,
@@ -420,15 +462,21 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
                 for e in callee_edges
             ],
             "callers_constraint": _build_callers_constraint(fn, caller_edges),
-            "related_rules": _related_rules(fn, root),
+            "related_rules": _related_rules(fn, graph, root),
             "recent_changes": _recent_changes_from_graph(fn, graph),
         }
+
+        semantic_ctx = _semantic_context_for_fn(fn, graph, root)
+        if semantic_ctx:
+            result["semantic"] = semantic_ctx
+
+        return result
 
     if file_path:
         file_node = graph.files.get(file_path)
         if not file_node:
             return {"error": f"File not found: {file_path}"}
-        return {
+        file_result: dict[str, Any] = {
             "file": file_path,
             "language": file_node.language,
             "loc": file_node.lines_of_code,
@@ -444,6 +492,15 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
                 if fid in graph.functions
             ],
         }
+        if root:
+            from winkers.protect import load_startup_chain
+            if file_path in load_startup_chain(root):
+                file_result["startup_chain"] = True
+                file_result["warning"] = (
+                    "This file is in the startup chain. "
+                    "Changes here can prevent the application from starting."
+                )
+        return file_result
 
     return {"error": "Provide 'function' or 'file' argument"}
 
@@ -536,17 +593,12 @@ def _signature(fn: Any) -> str:
     return f"({params}){ret}"
 
 
-def _infer_zone(path: str) -> str:
-    parts = path.replace("\\", "/").split("/")
-    return parts[0] if len(parts) > 1 else "root"
-
-
 def _zone_imports_from(zone: str, zones: dict[str, list[str]], graph: Graph) -> list[str]:
     zone_files = set(zones.get(zone, []))
     imported_zones: set[str] = set()
     for edge in graph.import_edges:
         if edge.source_file in zone_files:
-            target_zone = _infer_zone(edge.target_file)
+            target_zone = graph.file_zone(edge.target_file)
             if target_zone != zone:
                 imported_zones.add(target_zone)
     return sorted(imported_zones)
@@ -557,7 +609,7 @@ def _zone_imported_by(zone: str, zones: dict[str, list[str]], graph: Graph) -> l
     importing_zones: set[str] = set()
     for edge in graph.import_edges:
         if edge.target_file in zone_files:
-            source_zone = _infer_zone(edge.source_file)
+            source_zone = graph.file_zone(edge.source_file)
             if source_zone != zone:
                 importing_zones.add(source_zone)
     return sorted(importing_zones)
@@ -585,12 +637,29 @@ def _recent_changes_from_graph(fn: Any, graph: Graph) -> list[dict]:
     return file_node.recent_commits
 
 
-def _related_rules(fn: Any, root: Path | None) -> list[dict]:
+def _semantic_context_for_fn(fn: Any, graph: Graph, root: Path | None) -> dict:
+    """Return zone_intent and data_flow for the function's zone."""
+    if root is None:
+        return {}
+    semantic = _load_semantic(root)
+    if semantic is None:
+        return {}
+    zone = graph.file_zone(fn.file)
+    ctx: dict[str, Any] = {}
+    if zone in semantic.zone_intents:
+        intent = semantic.zone_intents[zone]
+        ctx["zone_intent"] = {"why": intent.why, "wrong_approach": intent.wrong_approach}
+    if semantic.data_flow:
+        ctx["data_flow"] = semantic.data_flow
+    return ctx
+
+
+def _related_rules(fn: Any, graph: Graph, root: Path | None) -> list[dict]:
     """Find rules from rules.json that affect this function's zone or file."""
     if root is None:
         return []
     rules_file = _load_rules(root)
-    zone = _infer_zone(fn.file)
+    zone = graph.file_zone(fn.file)
     return [
         {"id": r.id, "category": r.category, "title": r.title}
         for r in rules_file.rules
