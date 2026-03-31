@@ -666,9 +666,15 @@ def _install_claude_md_snippet(root: Path) -> None:
             claude_md.write_text(updated.rstrip() + "\n", encoding="utf-8")
             click.echo(f"  [ok] Updated Winkers section in CLAUDE.md to v{__version__}.")
             return
-        claude_md.write_text(
-            existing.rstrip() + "\n\n" + snippet, encoding="utf-8"
-        )
+        # Insert after first heading (# Title) so agent reads it early.
+        # Fall back to prepending if no heading found.
+        first_h1 = re.search(r"^# .+\n", existing, re.MULTILINE)
+        if first_h1:
+            insert_at = first_h1.end()
+            updated = existing[:insert_at] + "\n" + snippet + "\n" + existing[insert_at:]
+        else:
+            updated = snippet + "\n\n" + existing
+        claude_md.write_text(updated.rstrip() + "\n", encoding="utf-8")
     else:
         claude_md.write_text(snippet, encoding="utf-8")
 
@@ -1435,6 +1441,15 @@ def doctor(path: str):
         version_marker = f"winkers-snippet-version: {winkers.__version__}"
         if version_marker in content:
             ok(f"CLAUDE.md snippet up to date (v{winkers.__version__})")
+            # Check position: snippet should be in the first half
+            marker_pos = content.index("Architectural context (Winkers)")
+            if len(content) > 0 and marker_pos > len(content) // 2:
+                warn(
+                    "CLAUDE.md Winkers section is near the end"
+                    " — run: winkers init to move it up"
+                )
+            else:
+                ok("CLAUDE.md Winkers section positioned early")
         elif "winkers-snippet-version" in content:
             warn("CLAUDE.md snippet outdated — run: winkers init")
         else:
