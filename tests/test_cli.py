@@ -57,7 +57,11 @@ def test_init_autodetects_claude_code(project: Path):
     import json as _json
     mcp_data = _json.loads(mcp_json.read_text(encoding="utf-8"))
     assert mcp_data["mcpServers"]["winkers"]["command"] == "uvx"
-    assert mcp_data["mcpServers"]["winkers"]["args"] == ["winkers", "serve", "."]
+    args = mcp_data["mcpServers"]["winkers"]["args"]
+    assert args[0] == "winkers"
+    assert args[1] == "serve"
+    # Third arg is the absolute project path (not ".")
+    assert str(project).replace("\\", "/") in args[2]
     # Project-level settings.json has SessionEnd hook
     proj_settings = project / ".claude" / "settings.json"
     assert proj_settings.exists()

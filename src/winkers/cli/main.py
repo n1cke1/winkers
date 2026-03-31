@@ -587,13 +587,16 @@ def _templates_dir() -> Path:
 def _install_claude_code(root: Path) -> None:
     import shutil as _shutil
 
-    # --- Project-level .mcp.json (portable, works after clone) ---
+    # --- Project-level .mcp.json ---
+    # Use absolute path so the MCP server finds the project
+    # regardless of the working directory Claude Code launches from.
     mcp_json = root / ".mcp.json"
+    root_posix = str(root).replace("\\", "/")
     mcp_config = {
         "mcpServers": {
             "winkers": {
                 "command": "uvx",
-                "args": ["winkers", "serve", "."],
+                "args": ["winkers", "serve", root_posix],
                 "type": "stdio",
             }
         }
@@ -748,9 +751,8 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
 
     # --- autocommit hook (must run before record so bind_to_commit finds the commit) ---
     autocommit_cmd = (
-        "git add -A && git diff --cached --quiet"
-        " || git commit -m 'wip: auto-commit from Claude session'"
-        " --no-verify"
+        f"git add -A && git diff --cached --quiet"
+        f" || {hook_bin} autocommit"
     )
     autocommit_exists = any(
         AUTO_COMMIT_MARKER in hook.get("command", "")
@@ -1292,8 +1294,9 @@ def improve(path: str, do_apply: bool):
 @cli.command()
 @click.argument("path", default=".", type=click.Path(exists=True))
 def doctor(path: str):
-    """Check project health: dependencies, graph, MCP, API key."""
+    """Check environment and project health."""
     import shutil
+    import subprocess
     import sys
 
     root = Path(path).resolve()
@@ -1310,12 +1313,28 @@ def doctor(path: str):
         click.echo(f"  [!!] {msg}")
         warn_count += 1
 
+    # ── Environment ──────────────────────────────────────────────
+    click.echo("\n  Environment:")
+
     # Python version
     v = sys.version_info
     if v >= (3, 11):
         ok(f"Python {v.major}.{v.minor}.{v.micro}")
     else:
         warn(f"Python {v.major}.{v.minor} — requires 3.11+")
+
+    # Isolation: where is winkers running from?
+    winkers_path = Path(__file__).resolve()
+    exe_path = Path(sys.executable).resolve()
+    in_pipx = "pipx" in str(winkers_path).lower()
+    in_project_venv = (root / ".venv").exists() and str(root.resolve()) in str(exe_path)
+
+    if in_pipx:
+        ok("Running from pipx (isolated)")
+    elif in_project_venv:
+        warn("Running from project .venv — may conflict with project deps")
+    else:
+        ok(f"Running from: {exe_path.parent}")
 
     # tree-sitter
     try:
@@ -1361,6 +1380,9 @@ def doctor(path: str):
     else:
         warn("ANTHROPIC_API_KEY not set (semantic features disabled)")
 
+    # ── Project files ────────────────────────────────────────────
+    click.echo("\n  Project:")
+
     # graph.json
     from winkers.store import GraphStore
     graph = GraphStore(root).load()
@@ -1373,6 +1395,12 @@ def doctor(path: str):
     else:
         warn("No graph.json — run: winkers init")
 
+    # Schema version
+    if graph and graph.meta.get("schema_version"):
+        ok(f"Schema version: {graph.meta['schema_version']}")
+    elif graph:
+        warn("No schema_version in graph — run: winkers init to rebuild")
+
     # semantic.json
     from winkers.semantic import SemanticStore
     sem = SemanticStore(root).load()
@@ -1381,6 +1409,17 @@ def doctor(path: str):
     else:
         warn("No semantic.json — run: winkers init (needs API key)")
 
+    # rules.json
+    from winkers.conventions import RulesStore
+    rules = RulesStore(root).load()
+    if rules.rules:
+        ok(f"rules.json: {len(rules.rules)} rules")
+    else:
+        warn("No rules — run: winkers init (with API key for auto-detection)")
+
+    # ── IDE integration ──────────────────────────────────────────
+    click.echo("\n  IDE integration:")
+
     # MCP registration
     mcp_json = root / ".mcp.json"
     if mcp_json.exists():
@@ -1388,10 +1427,100 @@ def doctor(path: str):
     else:
         warn("No .mcp.json — run: winkers init (with .claude/ present)")
 
-    # Schema version
-    if graph and graph.meta.get("schema_version"):
-        ok(f"Schema version: {graph.meta['schema_version']}")
+    # CLAUDE.md snippet
+    claude_md = root / "CLAUDE.md"
+    if claude_md.exists():
+        content = claude_md.read_text(encoding="utf-8")
+        import winkers
+        version_marker = f"winkers-snippet-version: {winkers.__version__}"
+        if version_marker in content:
+            ok(f"CLAUDE.md snippet up to date (v{winkers.__version__})")
+        elif "winkers-snippet-version" in content:
+            warn("CLAUDE.md snippet outdated — run: winkers init")
+        else:
+            warn("CLAUDE.md exists but no Winkers snippet")
 
+        if "<!-- winkers-semantic-start -->" in content:
+            ok("CLAUDE.md semantic summary present")
+        elif sem:
+            warn("CLAUDE.md missing semantic summary — run: winkers init")
+    else:
+        warn("No CLAUDE.md")
+
+    # SessionEnd hook
+    settings_path = root / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            if "SessionEnd" in settings.get("hooks", {}):
+                ok("SessionEnd hook configured")
+            else:
+                warn("No SessionEnd hook in .claude/settings.json")
+        except Exception:
+            warn("Could not read .claude/settings.json")
+    elif (root / ".claude").is_dir():
+        warn("No .claude/settings.json — run: winkers init")
+
+    # ── Protect & hooks ──────────────────────────────────────────
+    click.echo("\n  Features:")
+
+    # Protect config
+    from winkers.protect import load_startup_chain
+    chain = load_startup_chain(root)
+    if chain:
+        ok(f"Startup chain: {len(chain)} protected files")
+    else:
+        ok("No startup chain configured (optional: winkers protect --startup)")
+
+    # Commit format
+    from winkers.commit_format import load_commit_format
+    fmt = load_commit_format(root)
+    if fmt:
+        ok(f"Commit format: {fmt.get('template', '?')}")
+    else:
+        ok("No commit format configured (optional: winkers hooks)")
+
+    # Git hooks
+    hook_path = root / ".githooks" / "prepare-commit-msg"
+    if hook_path.exists():
+        try:
+            hooks_path_setting = subprocess.check_output(
+                ["git", "config", "core.hooksPath"],
+                text=True, cwd=str(root), stderr=subprocess.DEVNULL,
+            ).strip()
+            if hooks_path_setting == ".githooks":
+                ok("Git hooksPath = .githooks")
+            else:
+                warn(f"Git hooksPath = '{hooks_path_setting}', expected '.githooks'")
+        except Exception:
+            warn(
+                "Hook installed but core.hooksPath not set"
+                " — run: git config core.hooksPath .githooks"
+            )
+    elif fmt:
+        warn("Commit format set but hook not installed — run: winkers hooks")
+
+    # ── Sessions & insights ──────────────────────────────────────
+    click.echo("\n  Learning:")
+
+    from winkers.session_store import SessionStore
+    sessions = SessionStore(root).load_all()
+    if sessions:
+        ok(f"{len(sessions)} recorded session(s)")
+    else:
+        ok("No recorded sessions (run: winkers record)")
+
+    from winkers.insights_store import InsightsStore
+    insights = InsightsStore(root).open_insights()
+    if insights:
+        high = sum(1 for i in insights if i.priority == "high")
+        ok(f"{len(insights)} open insight(s) ({high} high-priority)")
+    elif sessions:
+        ok("No insights (run: winkers analyze)")
+    else:
+        ok("No insights yet")
+
+    # ── Summary ──────────────────────────────────────────────────
     click.echo(f"\n  {ok_count} ok, {warn_count} warning(s)")
 
 
@@ -1500,26 +1629,94 @@ def commit_fmt(msg_file: str):
     msg_path.write_text(formatted + "\n", encoding="utf-8")
 
 
+@cli.command("autocommit")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def autocommit(path: str):
+    """Generate a commit message via Haiku and commit staged changes.
+
+    \b
+    Intended for the SessionEnd hook:
+      winkers autocommit
+
+    Generates a meaningful message from the staged diff via Claude API.
+    Falls back to file/function list if API is unavailable.
+    Applies the configured commit_format template if set.
+    """
+    import subprocess as _sp
+
+    root = Path(path).resolve()
+    _load_dotenv(root)
+
+    # Check there are staged changes
+    try:
+        _sp.check_output(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=str(root), stderr=_sp.DEVNULL,
+        )
+        # exit code 0 = no staged changes
+        return
+    except _sp.CalledProcessError:
+        pass  # exit code 1 = there are staged changes
+
+    from winkers.commit_format import (
+        format_message,
+        generate_commit_message,
+        load_commit_format,
+    )
+
+    msg = generate_commit_message(root)
+
+    # Apply template if configured
+    fmt = load_commit_format(root)
+    if fmt and fmt.get("template"):
+        msg = format_message(
+            msg,
+            fmt["template"],
+            fmt.get("ticket_pattern", r"[A-Z]+-\d+"),
+        )
+
+    try:
+        _sp.check_call(
+            ["git", "commit", "-m", msg],
+            cwd=str(root),
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        )
+        click.echo(f"  [ok] {msg}")
+    except _sp.CalledProcessError:
+        click.echo("  [!!] git commit failed", err=True)
+
+
 @cli.command("commits")
 @click.argument("path", default=".", type=click.Path(exists=True))
 @click.option("--range", "git_range", default="HEAD~5..HEAD",
-              help="Git range to normalize (default: HEAD~5..HEAD).")
+              help="Git range (default: HEAD~5..HEAD).")
+@click.option("--enrich", is_flag=True, default=False,
+              help="Use Haiku to generate better messages for all commits in range.")
 @click.option("--dry-run/--apply", default=True,
               help="Show changes without applying (default: dry-run).")
-def commits_normalize(path: str, git_range: str, dry_run: bool):
-    """Normalize commit messages to match the configured template.
+def commits_normalize(path: str, git_range: str, enrich: bool, dry_run: bool):
+    """Normalize or enrich commit messages.
 
     \b
-    winkers commits --range HEAD~10..HEAD            Preview changes
-    winkers commits --range HEAD~10..HEAD --apply     Rewrite commits
+    winkers commits --range HEAD~10..HEAD              Template normalization
+    winkers commits --enrich --range HEAD~20..HEAD     AI-powered enrichment
+    winkers commits --enrich --apply                   Rewrite with enriched messages
     """
     root = Path(path).resolve()
 
+    if enrich:
+        _commits_enrich(root, git_range, dry_run)
+    else:
+        _commits_template(root, git_range, dry_run)
+
+
+def _commits_template(root: Path, git_range: str, dry_run: bool) -> None:
+    """Normalize commits using the configured template."""
     from winkers.commit_format import load_commit_format, normalize_commits
 
     fmt = load_commit_format(root)
     if not fmt:
-        click.echo("No commit_format in config. Run: winkers hooks install")
+        click.echo("No commit_format in config. Run: winkers hooks")
         return
 
     results = normalize_commits(root, git_range, dry_run=dry_run)
@@ -1532,10 +1729,84 @@ def commits_normalize(path: str, git_range: str, dry_run: bool):
         click.echo(f"        -> {r['new']}")
 
     if dry_run:
-        click.echo(f"\n{len(results)} commit(s) to normalize. Run with --apply to rewrite.")
+        click.echo(
+            f"\n{len(results)} commit(s) to normalize."
+            " Run with --apply to rewrite."
+        )
+
+
+def _commits_enrich(root: Path, git_range: str, dry_run: bool) -> None:
+    """Enrich commit messages using Haiku (diff + session context)."""
+    import subprocess as _sp
+
+    _load_dotenv(root)
+
+    try:
+        log_output = _sp.check_output(
+            ["git", "log", "--format=%H|%s|%aI|%an", git_range],
+            text=True, cwd=str(root), stderr=_sp.DEVNULL,
+        ).strip()
+    except Exception:
+        click.echo("Could not read git log.")
+        return
+
+    if not log_output:
+        click.echo("No commits in range.")
+        return
+
+    from winkers.commit_format import (
+        enrich_commit,
+        format_message,
+        load_commit_format,
+    )
+
+    fmt = load_commit_format(root)
+    template = fmt.get("template") if fmt else None
+    ticket_pattern = fmt.get("ticket_pattern", r"[A-Z]+-\d+") if fmt else r"[A-Z]+-\d+"
+
+    results = []
+    for line in log_output.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        commit_hash, old_msg, date, author = parts
+
+        new_msg = enrich_commit(root, commit_hash)
+        if new_msg is None:
+            continue
+
+        # Apply template if configured
+        if template:
+            new_msg = format_message(new_msg, template, ticket_pattern)
+
+        if new_msg != old_msg:
+            results.append({
+                "hash": commit_hash[:8],
+                "old": old_msg,
+                "new": new_msg,
+                "date": date[:10],
+                "author": author,
+            })
+
+    if not results:
+        click.echo("No commits to enrich.")
+        return
+
+    for r in results:
+        click.echo(f"  {r['hash']}  {r['date']}  {r['author']}")
+        click.echo(f"    old: {r['old']}")
+        click.echo(f"    new: {r['new']}")
+
+    if dry_run:
+        click.echo(
+            f"\n{len(results)} commit(s) to enrich."
+            " Run with --apply to rewrite."
+        )
     else:
-        click.echo(f"\n{len(results)} commit(s) would be rewritten.")
-        click.echo("Note: interactive rebase required. Use git rebase -i to apply.")
+        click.echo(
+            f"\n{len(results)} commit(s) enriched."
+            " Use git rebase -i to apply the new messages."
+        )
 
 
 @cli.command()
