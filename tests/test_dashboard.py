@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from winkers.dashboard.api import create_app
 from winkers.dashboard.handlers.data import _history
 from winkers.dashboard.handlers.graph import _graph_to_cytoscape, _preview
-from winkers.models import CallEdge, CallSite, FunctionNode, Graph, ImportEdge
+from winkers.models import CallEdge, CallSite, FileNode, FunctionNode, Graph, ImportEdge
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -40,6 +40,14 @@ def _graph_with_data():
     g = Graph()
     g.functions["api/a.py::foo"] = _fn("api/a.py::foo", "api/a.py")
     g.functions["db/b.py::bar"] = _fn("db/b.py::bar", "db/b.py")
+    g.files["api/a.py"] = FileNode(
+        path="api/a.py", language="python", imports=[],
+        function_ids=["api/a.py::foo"], zone="api",
+    )
+    g.files["db/b.py"] = FileNode(
+        path="db/b.py", language="python", imports=[],
+        function_ids=["db/b.py::bar"], zone="db",
+    )
     g.call_edges = [_edge("api/a.py::foo", "db/b.py::bar")]
     g.import_edges = [ImportEdge(source_file="api/a.py", target_file="db/b.py", names=[])]
     return g

@@ -70,15 +70,13 @@ def _graph_to_cytoscape(
     include_ui: bool = False,
 ) -> dict[str, Any]:
     """Convert Graph to Cytoscape.js elements format."""
-    from winkers.mcp.tools import _infer_zone
-
     nodes = []
     edges = []
 
     fn_ids_in_zone: set[str] = set()
 
     for fn_id, fn in graph.functions.items():
-        zone = _infer_zone(fn.file)
+        zone = graph.file_zone(fn.file)
         if zone_filter and zone != zone_filter:
             continue
         fn_ids_in_zone.add(fn_id)

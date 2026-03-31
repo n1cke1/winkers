@@ -157,11 +157,6 @@ class SemanticStore:
 # Graph summary for prompt
 # ---------------------------------------------------------------------------
 
-def _infer_zone(path: str) -> str:
-    parts = path.replace("\\", "/").split("/")
-    return parts[0] if len(parts) > 1 else "root"
-
-
 def _graph_hash(graph: Graph, root: Path) -> str:
     """Hash of all function bodies — changes when any code changes."""
     h = hashlib.sha256()
@@ -180,7 +175,7 @@ def _build_project_summary(graph: Graph, root: Path) -> str:
     zones: dict[str, dict[str, list[str]]] = {}
 
     for fn in graph.functions.values():
-        z = _infer_zone(fn.file)
+        z = graph.file_zone(fn.file)
         zones.setdefault(z, {}).setdefault(fn.file, []).append(fn.name)
 
     parts = []
@@ -197,8 +192,8 @@ def _build_project_summary(graph: Graph, root: Path) -> str:
     # Add import edges summary
     import_summary = []
     for edge in graph.import_edges:
-        src_z = _infer_zone(edge.source_file)
-        tgt_z = _infer_zone(edge.target_file)
+        src_z = graph.file_zone(edge.source_file)
+        tgt_z = graph.file_zone(edge.target_file)
         if src_z != tgt_z:
             import_summary.append(f"  {src_z} -> {tgt_z}")
 
@@ -441,6 +436,7 @@ class SemanticEnricher:
         usage = getattr(response, "usage", None)
         elapsed = time.monotonic() - _start
         layer.meta = {
+            "schema_version": "2",
             "model": used_model,
             "graph_hash": _graph_hash(graph, root),
             "input_tokens": getattr(usage, "input_tokens", 0),

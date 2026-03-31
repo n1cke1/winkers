@@ -13,7 +13,6 @@ from winkers.semantic import (
     SemanticStore,
     ZoneIntent,
     _graph_hash,
-    _infer_zone,
 )
 
 
@@ -60,10 +59,20 @@ def test_store_save_creates_dir(tmp_path):
 
 # --- Helpers ---
 
-def test_infer_zone():
-    assert _infer_zone("api/prices.py") == "api"
-    assert _infer_zone("models.py") == "root"
-    assert _infer_zone("src/main/App.java") == "src"
+def test_file_zone_from_graph():
+    """Graph.file_zone() returns stored zone or 'unknown' for missing paths."""
+    from winkers.models import FileNode, Graph
+
+    g = Graph()
+    g.files["api/prices.py"] = FileNode(
+        path="api/prices.py", language="python", imports=[], function_ids=[], zone="api",
+    )
+    g.files["models.py"] = FileNode(
+        path="models.py", language="python", imports=[], function_ids=[], zone="models",
+    )
+    assert g.file_zone("api/prices.py") == "api"
+    assert g.file_zone("models.py") == "models"
+    assert g.file_zone("nonexistent.py") == "unknown"
 
 
 def test_graph_hash_deterministic(tmp_path):

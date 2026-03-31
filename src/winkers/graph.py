@@ -14,6 +14,44 @@ from winkers.parser import ParseResult, TreeSitterParser
 _VALID_IDENT = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
+def _find_passthrough_prefixes(paths: list[str]) -> dict[str, str]:
+    """For each top-level directory, find a passthrough prefix to strip.
+
+    A directory is passthrough when it contains exactly one subdirectory
+    and no source files at its level.  The function walks down until
+    that condition breaks and returns the accumulated prefix.
+
+    Returns ``{top_dir: prefix_with_trailing_slash}`` only for top dirs
+    that actually have a passthrough chain.
+    """
+    by_top: dict[str, list[str]] = {}
+    for p in paths:
+        parts = p.split("/")
+        if len(parts) > 1:
+            by_top.setdefault(parts[0], []).append(p)
+
+    prefixes: dict[str, str] = {}
+    for top, files in by_top.items():
+        prefix = top + "/"
+        while True:
+            subdirs: set[str] = set()
+            has_files = False
+            for f in files:
+                rest = f[len(prefix):]
+                rest_parts = rest.split("/")
+                if len(rest_parts) == 1:
+                    has_files = True
+                else:
+                    subdirs.add(rest_parts[0])
+            if len(subdirs) == 1 and not has_files:
+                prefix = prefix + next(iter(subdirs)) + "/"
+            else:
+                break
+        if prefix != top + "/":
+            prefixes[top] = prefix
+    return prefixes
+
+
 class GraphBuilder:
     def __init__(self) -> None:
         self._parser = TreeSitterParser()
@@ -36,6 +74,7 @@ class GraphBuilder:
 
         elapsed = (time.monotonic() - start) * 1000
         graph.meta = {
+            "schema_version": "2",
             "languages": sorted({fn.language for fn in graph.functions.values()}),
             "total_files": len(graph.files),
             "total_functions": len(graph.functions),
@@ -50,14 +89,38 @@ class GraphBuilder:
     # ------------------------------------------------------------------
 
     def _assign_zones(self, graph: Graph) -> None:
-        """Assign zone to each file: first directory, or filename stem for root files."""
+        """Assign zone to each file, skipping passthrough directories.
+
+        A passthrough directory contains exactly one subdirectory and no
+        source files at its own level (e.g. ``src/winkers/``).  Files
+        after the passthrough prefix get their zone from the next
+        directory level; files sitting directly under the prefix get
+        zone ``"core"``.
+        """
+        all_paths = [rel.replace("\\", "/") for rel in graph.files]
+        prefixes = _find_passthrough_prefixes(all_paths)
+
         for rel, file_node in graph.files.items():
-            parts = rel.replace("\\", "/").split("/")
-            if len(parts) > 1:
-                file_node.zone = parts[0]
-            else:
+            path = rel.replace("\\", "/")
+            parts = path.split("/")
+
+            if len(parts) == 1:
                 # Root file: use filename without extension
                 file_node.zone = parts[0].rsplit(".", 1)[0]
+                continue
+
+            top = parts[0]
+            prefix = prefixes.get(top)
+
+            if prefix:
+                stripped = path[len(prefix):]
+                stripped_parts = stripped.split("/")
+                if len(stripped_parts) > 1:
+                    file_node.zone = stripped_parts[0]
+                else:
+                    file_node.zone = "core"
+            else:
+                file_node.zone = top
 
     def _build_import_edges(self, graph: Graph) -> None:
         """Build import edges from collected file imports."""

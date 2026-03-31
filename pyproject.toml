@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "winkers"
-version = "0.7.4"
+version = "0.7.5"
 description = "Architectural context layer for AI coding agents — function-level dependency graph via MCP"
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,16 +32,19 @@ dependencies = [
     "click>=8.1.0",
     "pydantic>=2.0.0",
     "aiohttp>=3.9.0",
-    "anthropic>=0.40.0",
 ]
 
 [project.optional-dependencies]
+semantic = [
+    "anthropic>=0.40.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.4.0",
     "mypy>=1.9.0",
+    "anthropic>=0.40.0",
 ]
 
 [project.urls]
