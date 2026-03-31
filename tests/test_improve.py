@@ -1,5 +1,6 @@
-"""Tests for Phase 3: improve viewer, insights prompt, redo detection."""
+"""Tests for Phase 3: improve viewer, insights prompt, redo detection, CLI commands."""
 
+from unittest.mock import patch
 
 from winkers.insights_store import InsightsStore, StoredInsight
 from winkers.semantic import build_insights_prompt
@@ -220,3 +221,152 @@ class TestRedoDetection:
 
         redo_path = tmp_path / ".winkers" / "redo_warning.md"
         assert not redo_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# improve --apply
+# ---------------------------------------------------------------------------
+
+class TestImproveApply:
+    def test_apply_injects_constraints(self, tmp_path):
+        """improve --apply adds high-priority injection_content to semantic.json."""
+        from winkers.insights_store import InsightsStore, StoredInsight
+        from winkers.semantic import SemanticLayer, SemanticStore
+
+        # Setup semantic.json
+        sem = SemanticLayer(data_flow="A -> B", constraints=["existing rule"])
+        SemanticStore(tmp_path).save(sem)
+
+        # Setup insights
+        store = InsightsStore(tmp_path)
+        store.save([
+            StoredInsight(
+                category="CONSTRAINT",
+                description="tax per line",
+                semantic_target="constraints",
+                injection_content="Tax must be per line item.",
+                priority="high",
+                session_ids=["s1"],
+                occurrences=3,
+            ),
+            StoredInsight(
+                category="CONVENTION",
+                description="minor thing",
+                semantic_target="conventions",
+                injection_content="Some low priority rule.",
+                priority="low",
+                session_ids=["s1"],
+            ),
+        ])
+
+        from click.testing import CliRunner
+
+        from winkers.cli.main import cli
+        result = CliRunner().invoke(cli, ["improve", str(tmp_path), "--apply"])
+        assert result.exit_code == 0, result.output
+        assert "Applied 1" in result.output
+
+        # Verify semantic.json updated
+        updated = SemanticStore(tmp_path).load()
+        assert "Tax must be per line item." in updated.constraints
+        assert "existing rule" in updated.constraints
+
+        # Verify insight marked as fixed
+        all_insights = InsightsStore(tmp_path).load()
+        high_items = [i for i in all_insights if i.priority == "high"]
+        assert all(i.status == "fixed" for i in high_items)
+
+    def test_dry_run_shows_insights(self, tmp_path):
+        """Default improve (no --apply) just displays insights."""
+        from winkers.insights_store import InsightsStore, StoredInsight
+
+        store = InsightsStore(tmp_path)
+        store.save([
+            StoredInsight(
+                category="DEBT",
+                description="complexity grew",
+                semantic_target="conventions",
+                injection_content="Keep complexity stable.",
+                priority="high",
+                session_ids=["s1"],
+            ),
+        ])
+
+        from click.testing import CliRunner
+
+        from winkers.cli.main import cli
+        result = CliRunner().invoke(cli, ["improve", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "complexity grew" in result.output
+        assert "Run with --apply" in result.output
+
+
+# ---------------------------------------------------------------------------
+# analyze command
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeCommand:
+    def test_analyze_no_sessions(self, tmp_path):
+        from click.testing import CliRunner
+
+        from winkers.cli.main import cli
+
+        result = CliRunner(env={"ANTHROPIC_API_KEY": "sk-test"}).invoke(
+            cli, ["analyze", str(tmp_path)]
+        )
+        assert result.exit_code == 0
+        assert "No recorded sessions" in result.output
+
+    def test_analyze_runs_on_session(self, tmp_path):
+        """analyze calls the API and merges insights."""
+        from winkers.analyzer import AnalysisResult, Insight
+        from winkers.models import ScoredSession, SessionRecord
+        from winkers.semantic import SemanticLayer, SemanticStore
+        from winkers.session_store import SessionStore
+
+        # Setup session
+        store = SessionStore(tmp_path)
+        scored = ScoredSession(
+            session=SessionRecord(
+                session_id="s1",
+                started_at="2026-03-25T10:00:00Z",
+                completed_at="2026-03-25T10:30:00Z",
+                task_prompt="Add late fees",
+            ),
+            score=0.6,
+        )
+        store.save(scored)
+
+        # Setup semantic
+        SemanticStore(tmp_path).save(SemanticLayer())
+
+        mock_result = AnalysisResult(
+            session_id="s1",
+            insights=[
+                Insight(
+                    category="CONSTRAINT",
+                    description="tax rule",
+                    semantic_target="constraints",
+                    injection_content="Tax per line.",
+                    priority="high",
+                    session_id="s1",
+                ),
+            ],
+        )
+
+        from click.testing import CliRunner
+
+        from winkers.cli.main import cli
+
+        with patch("winkers.analyzer.analyze_session", return_value=mock_result):
+            result = CliRunner(env={"ANTHROPIC_API_KEY": "sk-test"}).invoke(
+                cli, ["analyze", str(tmp_path)]
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "1 insight(s)" in result.output
+
+        # Verify insights saved
+        insights = InsightsStore(tmp_path).open_insights()
+        assert len(insights) == 1
+        assert insights[0].injection_content == "Tax per line."

@@ -9,6 +9,7 @@ from winkers.mcp.tools import (
     _section_functions_graph,
     _section_hotspots,
     _section_map,
+    _tool_orient,
     _tool_scope,
 )
 from winkers.resolver import CrossFileResolver
@@ -84,6 +85,27 @@ def test_scope_function_callers_constraint(graph):
     assert "safe_changes" in result["callers_constraint"]
     assert "breaking_changes" in result["callers_constraint"]
     assert "callers_expect" in result["callers_constraint"]
+
+
+def test_scope_function_semantic_context(graph, tmp_path):
+    """scope() includes semantic context when semantic.json exists."""
+    from winkers.semantic import SemanticLayer, SemanticStore, ZoneIntent
+
+    layer = SemanticLayer(
+        data_flow="User -> API -> DB",
+        zone_intents={"modules": ZoneIntent(why="business logic", wrong_approach="put SQL here")},
+    )
+    SemanticStore(tmp_path).save(layer)
+    result = _tool_scope(graph, {"function": "modules/pricing.py::calculate_price"}, root=tmp_path)
+    assert "semantic" in result
+    assert result["semantic"]["data_flow"] == "User -> API -> DB"
+    assert result["semantic"]["zone_intent"]["why"] == "business logic"
+
+
+def test_scope_function_no_semantic(graph, tmp_path):
+    """scope() omits semantic key when no semantic.json."""
+    result = _tool_scope(graph, {"function": "modules/pricing.py::calculate_price"}, root=tmp_path)
+    assert "semantic" not in result
 
 
 def test_scope_function_free(graph):
@@ -172,3 +194,42 @@ def test_hotspots_low_threshold(graph):
         assert "callers" in h
         assert len(h["callers"]) >= 1
         assert "expression" in h["callers"][0]
+
+
+# ---------------------------------------------------------------------------
+# orient token budget
+# ---------------------------------------------------------------------------
+
+def test_orient_truncates_large_response(graph, tmp_path):
+    """When max_tokens is tiny, orient truncates and adds a hint."""
+    result = _tool_orient(
+        graph,
+        {"include": ["map", "functions_graph", "hotspots"], "max_tokens": 50},
+        tmp_path,
+    )
+    # map should be included (highest priority, always fits first)
+    assert "map" in result
+    # At least one section should have been skipped
+    assert result.get("_truncated") is True
+    assert "_hint" in result
+
+
+def test_orient_no_truncation_within_budget(graph, tmp_path):
+    result = _tool_orient(
+        graph,
+        {"include": ["map"], "max_tokens": 50000},
+        tmp_path,
+    )
+    assert "map" in result
+    assert "_truncated" not in result
+
+
+def test_orient_respects_priority_order(graph, tmp_path):
+    """map has higher priority than functions_graph."""
+    result = _tool_orient(
+        graph,
+        {"include": ["functions_graph", "map"], "max_tokens": 50},
+        tmp_path,
+    )
+    # map should be present (higher priority), functions_graph skipped
+    assert "map" in result

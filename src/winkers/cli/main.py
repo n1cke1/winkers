@@ -607,6 +607,7 @@ def _install_claude_code(root: Path) -> None:
     winkers_bin = _shutil.which("winkers") or "winkers"
     _install_session_hook(root, winkers_bin)
     _install_claude_md_snippet(root)
+    _install_semantic_summary(root)
 
 
 def _remove_user_scope_mcp() -> None:
@@ -669,6 +670,59 @@ def _install_claude_md_snippet(root: Path) -> None:
         claude_md.write_text(snippet, encoding="utf-8")
 
     click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
+
+
+_SEM_START = "<!-- winkers-semantic-start -->"
+_SEM_END = "<!-- winkers-semantic-end -->"
+
+
+def _install_semantic_summary(root: Path) -> None:
+    """Append or update a short semantic summary block in CLAUDE.md.
+
+    Reads semantic.json and writes ~200 tokens of data_flow, domain_context,
+    and constraints so the agent has project context before its first tool call.
+    """
+    from winkers.semantic import SemanticStore
+
+    claude_md = root / "CLAUDE.md"
+    if not claude_md.exists():
+        return
+
+    sem = SemanticStore(root).load()
+    if sem is None:
+        return
+
+    lines: list[str] = []
+    if sem.data_flow:
+        lines.append(f"- **Data flow**: {sem.data_flow}")
+    if sem.domain_context:
+        lines.append(f"- **Domain**: {sem.domain_context}")
+    if sem.constraints:
+        for c in sem.constraints[:3]:
+            lines.append(f"- **Constraint**: {c}")
+
+    if not lines:
+        return
+
+    block = (
+        f"{_SEM_START}\n"
+        "### Project context (auto-generated)\n\n"
+        + "\n".join(lines) + "\n"
+        f"{_SEM_END}"
+    )
+
+    existing = claude_md.read_text(encoding="utf-8")
+
+    if _SEM_START in existing:
+        start = existing.index(_SEM_START)
+        end = existing.index(_SEM_END) + len(_SEM_END)
+        updated = existing[:start] + block + existing[end:]
+        claude_md.write_text(updated, encoding="utf-8")
+    else:
+        claude_md.write_text(
+            existing.rstrip() + "\n\n" + block + "\n", encoding="utf-8"
+        )
+    click.echo("  [ok] Updated CLAUDE.md with semantic summary")
 
 
 def _install_session_hook(root: Path, winkers_bin: str) -> None:
@@ -1081,6 +1135,407 @@ def conventions_migrate(path: str, yes: bool):
         click.echo("     overview.md updated.")
     else:
         click.echo("\nNo rules accepted.")
+
+
+@cli.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--all", "analyze_all", is_flag=True, default=False,
+              help="Analyze all recorded sessions, not just latest.")
+def analyze(path: str, analyze_all: bool):
+    """Analyze recorded sessions to find knowledge gaps.
+
+    Sends session traces to Haiku (~$0.01/session) to identify what
+    the agent didn't know.  Results accumulate in .winkers/insights.json
+    with deduplication and priority escalation.
+
+    \b
+    By default analyzes only the most recent unanalyzed session.
+    Use --all to analyze every recorded session.
+    """
+    _load_dotenv(Path(path).resolve())
+    root = Path(path).resolve()
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        click.echo("ANTHROPIC_API_KEY not set. Cannot analyze.")
+        return
+
+    from winkers.insights_store import InsightsStore
+    from winkers.semantic import SemanticStore
+    from winkers.session_store import SessionStore
+
+    store = SessionStore(root)
+    sessions = store.load_all()
+    if not sessions:
+        click.echo("No recorded sessions. Run: winkers record")
+        return
+
+    insights_store = InsightsStore(root)
+    already_analyzed: set[str] = set()
+    for item in insights_store.load():
+        already_analyzed.update(item.session_ids)
+
+    to_analyze = [
+        s for s in sessions if s.session.session_id not in already_analyzed
+    ]
+    if not analyze_all and to_analyze:
+        to_analyze = [to_analyze[-1]]
+
+    if not to_analyze:
+        click.echo("All sessions already analyzed.")
+        return
+
+    sem_store = SemanticStore(root)
+    sem = sem_store.load()
+    sem_json = sem.model_dump_json(indent=2) if sem else "{}"
+
+    try:
+        from winkers.analyzer import analyze_session
+    except ImportError:
+        click.echo("'anthropic' package required. Install with: pip install anthropic")
+        return
+
+    total_insights = 0
+    for scored in to_analyze:
+        click.echo(f"  Analyzing: {scored.session.task_prompt[:50]}...")
+        try:
+            result = analyze_session(scored, sem_json, api_key=api_key)
+        except RuntimeError as e:
+            click.echo(f"  Error: {e}")
+            continue
+
+        insights_store.merge(result)
+        total_insights += len(result.insights)
+        click.echo(
+            f"    {len(result.insights)} insight(s) "
+            f"({result.input_tokens + result.output_tokens} tokens)"
+        )
+
+    open_count = len(insights_store.open_insights())
+    click.echo(
+        f"\nDone. {total_insights} new insight(s), "
+        f"{open_count} open total in insights.json."
+    )
+
+
+@cli.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Inject high-priority insights into semantic.json.")
+def improve(path: str, do_apply: bool):
+    """Show or apply accumulated insights from session analysis.
+
+    \b
+    Default (dry-run): show open insights grouped by priority.
+    --apply: inject high-priority injection_content into
+             semantic.json constraints[], backup, mark as fixed.
+    """
+    root = Path(path).resolve()
+
+    from winkers.insights_store import InsightsStore
+    insights_store = InsightsStore(root)
+    open_items = insights_store.open_insights()
+
+    if not open_items:
+        click.echo("No open insights. Run: winkers analyze")
+        return
+
+    # Display insights
+    for i, item in enumerate(open_items):
+        marker = "*" if item.priority == "high" else "-"
+        occ = f" (x{item.occurrences})" if item.occurrences > 1 else ""
+        click.echo(
+            f"  {marker} [{item.priority}] {item.category}{occ}: "
+            f"{item.description}"
+        )
+        click.echo(f"    -> {item.injection_content}")
+
+    high = [it for it in open_items if it.priority == "high"]
+    click.echo(
+        f"\n{len(open_items)} open insight(s), {len(high)} high-priority."
+    )
+
+    if not do_apply:
+        click.echo("Run with --apply to inject high-priority insights.")
+        return
+
+    if not high:
+        click.echo("No high-priority insights to apply.")
+        return
+
+    from winkers.semantic import SemanticStore
+    sem_store = SemanticStore(root)
+    sem = sem_store.load()
+    if sem is None:
+        click.echo("No semantic.json. Run: winkers init")
+        return
+
+    # Backup before modifying
+    _backup_file(sem_store.semantic_path, root / ".winkers" / "history", "semantic")
+
+    applied_indices: list[int] = []
+    for i, item in enumerate(open_items):
+        if item.priority != "high":
+            continue
+        if item.injection_content and item.injection_content not in sem.constraints:
+            sem.constraints.append(item.injection_content)
+        applied_indices.append(i)
+
+    sem_store.save(sem)
+    insights_store.mark_fixed(applied_indices)
+
+    click.echo(
+        f"Applied {len(applied_indices)} insight(s) to semantic.json constraints."
+    )
+
+
+@cli.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+def doctor(path: str):
+    """Check project health: dependencies, graph, MCP, API key."""
+    import shutil
+    import sys
+
+    root = Path(path).resolve()
+    ok_count = 0
+    warn_count = 0
+
+    def ok(msg: str) -> None:
+        nonlocal ok_count
+        click.echo(f"  [ok] {msg}")
+        ok_count += 1
+
+    def warn(msg: str) -> None:
+        nonlocal warn_count
+        click.echo(f"  [!!] {msg}")
+        warn_count += 1
+
+    # Python version
+    v = sys.version_info
+    if v >= (3, 11):
+        ok(f"Python {v.major}.{v.minor}.{v.micro}")
+    else:
+        warn(f"Python {v.major}.{v.minor} — requires 3.11+")
+
+    # tree-sitter
+    try:
+        import tree_sitter  # noqa: F401
+        ok("tree-sitter installed")
+    except ImportError:
+        warn("tree-sitter not installed")
+
+    # Grammars
+    grammars = [
+        "tree_sitter_python", "tree_sitter_javascript", "tree_sitter_typescript",
+        "tree_sitter_java", "tree_sitter_go", "tree_sitter_rust", "tree_sitter_c_sharp",
+    ]
+    missing_grammars = []
+    for g in grammars:
+        try:
+            __import__(g)
+        except ImportError:
+            missing_grammars.append(g)
+    if missing_grammars:
+        warn(f"Missing grammars: {', '.join(missing_grammars)}")
+    else:
+        ok(f"All {len(grammars)} language grammars installed")
+
+    # git
+    if shutil.which("git"):
+        ok("git available")
+    else:
+        warn("git not found in PATH")
+
+    # anthropic (optional)
+    try:
+        import anthropic
+        ok(f"anthropic {anthropic.__version__}")
+    except ImportError:
+        warn("anthropic not installed (install with: pip install winkers[semantic])")
+
+    # API key
+    _load_dotenv(root)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        ok(f"ANTHROPIC_API_KEY set ({api_key[:12]}...)")
+    else:
+        warn("ANTHROPIC_API_KEY not set (semantic features disabled)")
+
+    # graph.json
+    from winkers.store import GraphStore
+    graph = GraphStore(root).load()
+    if graph:
+        ok(
+            f"graph.json: {len(graph.files)} files, "
+            f"{len(graph.functions)} functions, "
+            f"{len(graph.call_edges)} call edges"
+        )
+    else:
+        warn("No graph.json — run: winkers init")
+
+    # semantic.json
+    from winkers.semantic import SemanticStore
+    sem = SemanticStore(root).load()
+    if sem:
+        ok(f"semantic.json: {len(sem.zone_intents)} zone intents")
+    else:
+        warn("No semantic.json — run: winkers init (needs API key)")
+
+    # MCP registration
+    mcp_json = root / ".mcp.json"
+    if mcp_json.exists():
+        ok("MCP registered (.mcp.json)")
+    else:
+        warn("No .mcp.json — run: winkers init (with .claude/ present)")
+
+    # Schema version
+    if graph and graph.meta.get("schema_version"):
+        ok(f"Schema version: {graph.meta['schema_version']}")
+
+    click.echo(f"\n  {ok_count} ok, {warn_count} warning(s)")
+
+
+@cli.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--startup", is_flag=True, default=False,
+              help="Detect entry point and trace import chain.")
+@click.option("--entry", default=None,
+              help="Override entry point file (e.g. app.py).")
+def protect(path: str, startup: bool, entry: str | None):
+    """Mark critical files that must not break.
+
+    \b
+    winkers protect --startup          Auto-detect entry point
+    winkers protect --startup --entry app.py   Use specific entry
+    """
+    if not startup:
+        click.echo("Use --startup to trace the startup import chain.")
+        return
+
+    root = Path(path).resolve()
+
+    from winkers.protect import (
+        detect_entry_point,
+        save_protect_config,
+        trace_startup_chain,
+    )
+    from winkers.store import GraphStore
+
+    graph = GraphStore(root).load()
+    if graph is None:
+        click.echo("No graph.json. Run: winkers init")
+        return
+
+    if entry is None:
+        entry = detect_entry_point(graph)
+    if entry is None:
+        click.echo(
+            "No entry point found. Use --entry to specify "
+            "(e.g. winkers protect --startup --entry app.py)"
+        )
+        return
+
+    if entry not in graph.files:
+        click.echo(f"Entry point '{entry}' not found in graph.")
+        return
+
+    chain = trace_startup_chain(graph, entry)
+    save_protect_config(root, entry, chain)
+    click.echo(
+        f"  [ok] Startup chain: {entry} -> {len(chain)} files protected.\n"
+        f"  Chain: {', '.join(chain)}"
+    )
+
+
+@cli.command("hooks")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--template", default="[{ticket}] {message}",
+              help="Commit message template. Variables: {message}, {ticket}, {date}, {author}.")
+@click.option("--ticket-pattern", default=r"[A-Z]+-\d+",
+              help="Regex to extract ticket from branch or message.")
+def hooks_install(path: str, template: str, ticket_pattern: str):
+    """Install git hooks and configure commit format.
+
+    \b
+    Installs .githooks/prepare-commit-msg that applies the template.
+    Also saves the format in .winkers/config.json.
+
+    \b
+    After install, run:
+      git config core.hooksPath .githooks
+    """
+    root = Path(path).resolve()
+
+    from winkers.commit_format import install_hook, save_commit_format
+
+    save_commit_format(root, template, ticket_pattern)
+    hook_path = install_hook(root)
+
+    click.echo("  [ok] Commit format saved to .winkers/config.json")
+    click.echo(f"  [ok] Hook installed: {hook_path.relative_to(root)}")
+    click.echo("  Run: git config core.hooksPath .githooks")
+
+
+@cli.command("commit-fmt", hidden=True)
+@click.argument("msg_file", type=click.Path(exists=True))
+def commit_fmt(msg_file: str):
+    """Format a commit message file (called by prepare-commit-msg hook)."""
+    msg_path = Path(msg_file)
+    root = Path(".").resolve()
+
+    from winkers.commit_format import format_message, load_commit_format
+
+    fmt = load_commit_format(root)
+    if not fmt:
+        return
+
+    template = fmt.get("template", "{message}")
+    ticket_pattern = fmt.get("ticket_pattern", r"[A-Z]+-\d+")
+
+    original = msg_path.read_text(encoding="utf-8").strip()
+    if not original:
+        return
+
+    formatted = format_message(original, template, ticket_pattern)
+    msg_path.write_text(formatted + "\n", encoding="utf-8")
+
+
+@cli.command("commits")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--range", "git_range", default="HEAD~5..HEAD",
+              help="Git range to normalize (default: HEAD~5..HEAD).")
+@click.option("--dry-run/--apply", default=True,
+              help="Show changes without applying (default: dry-run).")
+def commits_normalize(path: str, git_range: str, dry_run: bool):
+    """Normalize commit messages to match the configured template.
+
+    \b
+    winkers commits --range HEAD~10..HEAD            Preview changes
+    winkers commits --range HEAD~10..HEAD --apply     Rewrite commits
+    """
+    root = Path(path).resolve()
+
+    from winkers.commit_format import load_commit_format, normalize_commits
+
+    fmt = load_commit_format(root)
+    if not fmt:
+        click.echo("No commit_format in config. Run: winkers hooks install")
+        return
+
+    results = normalize_commits(root, git_range, dry_run=dry_run)
+    if not results:
+        click.echo("No commits need normalization.")
+        return
+
+    for r in results:
+        click.echo(f"  {r['hash']}  {r['old']}")
+        click.echo(f"        -> {r['new']}")
+
+    if dry_run:
+        click.echo(f"\n{len(results)} commit(s) to normalize. Run with --apply to rewrite.")
+    else:
+        click.echo(f"\n{len(results)} commit(s) would be rewritten.")
+        click.echo("Note: interactive rebase required. Use git rebase -i to apply.")
 
 
 @cli.command()
