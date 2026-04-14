@@ -335,3 +335,40 @@ class TestHookInstaller:
         assert changed is False
         assert len(hooks["UserPromptSubmit"]) == 1
         assert len(hooks["Stop"]) == 1
+
+    def test_install_updates_stale_path(self, tmp_path):
+        """Hooks with old path get updated to new winkers binary."""
+        from winkers.cli.main import _install_interactive_hooks
+
+        hooks: dict = {}
+        # Install with old Linux path
+        _install_interactive_hooks(hooks, "/opt/old/.venv/bin/winkers", tmp_path)
+        old_cmd = hooks["Stop"][0]["hooks"][0]["command"]
+        assert "/opt/old/" in old_cmd
+
+        # Re-install with current Windows path
+        changed = _install_interactive_hooks(
+            hooks, "C:/Dev/.venv/Scripts/winkers", tmp_path,
+        )
+        assert changed is True
+        new_cmd = hooks["Stop"][0]["hooks"][0]["command"]
+        assert "C:/Dev/" in new_cmd
+        assert "/opt/old/" not in new_cmd
+        # No duplicates
+        assert len(hooks["Stop"]) == 1
+
+    def test_upsert_session_hook(self):
+        """_upsert_hook updates existing command path."""
+        from winkers.cli.main import _upsert_hook
+
+        hook_list: list[dict] = [{
+            "matcher": "",
+            "hooks": [{"type": "command", "command": "/old/path/winkers record --hook"}],
+        }]
+        changed = _upsert_hook(
+            hook_list, "record", "/new/path/winkers record --hook",
+            label="test",
+        )
+        assert changed is True
+        assert hook_list[0]["hooks"][0]["command"] == "/new/path/winkers record --hook"
+        assert len(hook_list) == 1  # no duplicate

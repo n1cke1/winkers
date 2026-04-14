@@ -11,8 +11,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-AUTO_COMMIT_MARKER = "auto-commit"
-"""Substring used to detect auto-commit messages (shared with CLI hook)."""
+AUTO_COMMIT_MARKER = "autocommit"
+"""Substring used to detect autocommit hook commands in settings.json."""
+
+AUTO_COMMIT_MSG_MARKER = "auto-commit"
+"""Substring used to filter old 'wip: auto-commit' messages in git log."""
 
 
 def run_git(
