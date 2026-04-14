@@ -1,33 +1,24 @@
 # Architectural Context — Winkers
 
 This project uses Winkers MCP server for function-level dependency tracking.
-Run `winkers serve` to start the server, then use these tools:
+The server starts automatically via `.mcp.json`. Four tools available:
 
 ## Workflow for code changes
 
 Before modifying any code:
 
-1. **`map(detail="zones")`** — understand project structure, identify
-   relevant zones and hotspot functions (most callers = highest risk).
+1. **`orient(["map","conventions"])`** — project structure, zones, hotspots,
+   data flow, zone intents, domain context. **Call first.**
 
-2. **`map(detail="files", zone="<zone>")`** — list files with their
-   functions marked as locked (has callers) or free (no callers).
+2. **`scope(file="<path>")`** — for each file you'll touch:
+   locked/free functions, callers, related rules, startup chain warnings.
 
-3. **`scope(file="<path>")`** — for each file you'll touch, get:
-   - which functions are locked and who calls them
-   - what callers expect (signature)
-   - safe changes vs breaking changes
-
-4. **`inspect(function="<id>")`** — source code when needed.
-   Add `include_callers_code=true` to see call sites.
+3. **`orient(["rules_list"])`** — available coding rule categories.
+   Then **`rule_read("<category>")`** for details with wrong_approach.
 
 After writing code:
 
-5. **`analyze(files=[...])`** — re-parse changed files and check for:
-   - `signature_changed`: locked function signature differs from what callers expect
-   - `function_removed`: locked function deleted while callers exist
-
-   Fix all violations before committing.
+4. **`scope(function="<name>")`** — verify callers are not broken by your change.
 
 ## Key concepts
 
@@ -35,7 +26,15 @@ After writing code:
 |------|---------|
 | **locked** | Function has callers depending on its signature |
 | **free** | No callers — safe to modify freely |
-| **confidence** | How certain the resolver is (1.0=direct import, 0.5=name guess) |
+| **startup_chain** | File is in the startup import chain — changes can prevent app start |
+
+## Other tools
+
+- `orient(["functions_graph"])` — full indexed function list with caller counts.
+- `orient(["hotspots"])` — functions with many callers; high-impact to change.
+- `orient(["routes"])` — HTTP endpoints: method, path, handler, callees.
+- `orient(["ui_map"])` — route-to-template links with UI elements.
+- `convention_read("<zone>")` — zone intent details, data_flow, checklist.
 
 ## Example
 
@@ -43,14 +42,13 @@ After writing code:
 User: add batch discount feature
 
 Agent:
-  map(zones) → business_logic has pricing.py
-  map(files, zone=business_logic) → calculate_price LOCKED (5 callers)
-  scope(file=pricing.py) → callers expect (item_id:int, qty:int)->float
+  orient(["map","conventions"]) → zones: modules, api. hotspot: calculate_price (7 callers)
+  scope(file="modules/pricing.py") → calculate_price LOCKED, callers expect (item_id, qty)->float
 
-  Decision: new batch_apply_discounts() calls calculate_price in loop.
+  Decision: new batch_calculate_prices() calls calculate_price in loop.
   Does not change calculate_price signature.
 
   [writes code]
 
-  analyze(files=["pricing.py"]) → violations: []  [ok]
+  scope(function="calculate_price") → callers unchanged [ok]
 ```
