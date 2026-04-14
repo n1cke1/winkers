@@ -883,44 +883,17 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
         f"git add -A && git diff --cached --quiet"
         f" || {hook_bin} autocommit"
     )
-    autocommit_exists = any(
-        AUTO_COMMIT_MARKER in hook.get("command", "")
-        for entry in session_end
-        for hook in entry.get("hooks", [])
-    )
-    if autocommit_exists:
-        click.echo("  [ok] SessionEnd autocommit hook already installed.")
-    else:
-        session_end.append({
-            "matcher": "",
-            "hooks": [{
-                "type": "command",
-                "command": autocommit_cmd,
-                "timeout": 30,
-            }],
-        })
-        click.echo("  [ok] SessionEnd autocommit hook installed.")
-        changed = True
+    changed = _upsert_hook(
+        session_end, AUTO_COMMIT_MARKER, autocommit_cmd,
+        timeout=30, label="SessionEnd autocommit",
+    ) or changed
 
     # --- record hook ---
-    record_exists = any(
-        "record" in hook.get("command", "")
-        for entry in session_end
-        for hook in entry.get("hooks", [])
-    )
-    if record_exists:
-        click.echo("  [ok] SessionEnd record hook already installed.")
-    else:
-        session_end.append({
-            "matcher": "",
-            "hooks": [{
-                "type": "command",
-                "command": f"{hook_bin} record --hook",
-                "timeout": 60,
-            }],
-        })
-        click.echo("  [ok] SessionEnd record hook installed.")
-        changed = True
+    record_cmd = f"{hook_bin} record --hook"
+    changed = _upsert_hook(
+        session_end, "record", record_cmd,
+        timeout=60, label="SessionEnd record",
+    ) or changed
 
     # --- Tool permissions ---
     permissions = settings.setdefault("permissions", {})
@@ -940,6 +913,31 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
         settings_path.write_text(
             json.dumps(settings, indent=2), encoding="utf-8",
         )
+
+
+def _upsert_hook(
+    hook_list: list[dict], marker: str, command: str,
+    timeout: int = 10, label: str = "",
+) -> bool:
+    """Insert or update a hook entry. Returns True if changed."""
+    for entry in hook_list:
+        for h in entry.get("hooks", []):
+            if marker in h.get("command", ""):
+                if h["command"] == command:
+                    click.echo(f"  [ok] {label} hook up to date.")
+                    return False
+                # Path changed — update in place
+                h["command"] = command
+                click.echo(f"  [ok] {label} hook path updated.")
+                return True
+
+    # Not found — add new
+    hook_list.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": command, "timeout": timeout}],
+    })
+    click.echo(f"  [ok] {label} hook installed.")
+    return True
 
 
 def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
@@ -984,15 +982,26 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
 
     for hdef in hook_defs:
         event_hooks = hooks.setdefault(hdef["event"], [])
-        exists = any(
-            hdef["marker"] in h.get("command", "")
-            for entry in event_hooks
-            for h in entry.get("hooks", [])
-        )
-        if exists:
-            click.echo(f"  [ok] {hdef['event']} {hdef['label']} hook already installed.")
-        else:
-            entry: dict = {
+        label = f"{hdef['event']} {hdef['label']}"
+
+        # Check if exists and path is current
+        found = False
+        for entry in event_hooks:
+            for h in entry.get("hooks", []):
+                if hdef["marker"] in h.get("command", ""):
+                    found = True
+                    if h["command"] != hdef["command"]:
+                        h["command"] = hdef["command"]
+                        click.echo(f"  [ok] {label} hook path updated.")
+                        changed = True
+                    else:
+                        click.echo(f"  [ok] {label} hook up to date.")
+                    break
+            if found:
+                break
+
+        if not found:
+            entry_new: dict = {
                 "hooks": [{
                     "type": "command",
                     "command": hdef["command"],
@@ -1000,9 +1009,9 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
                 }],
             }
             if hdef["matcher"]:
-                entry["matcher"] = hdef["matcher"]
-            event_hooks.append(entry)
-            click.echo(f"  [ok] {hdef['event']} {hdef['label']} hook installed.")
+                entry_new["matcher"] = hdef["matcher"]
+            event_hooks.append(entry_new)
+            click.echo(f"  [ok] {label} hook installed.")
             changed = True
 
     return changed
