@@ -155,6 +155,36 @@ class Match:
     callers: int = 0
 
 
+# Per-process token cache: {fn_id: (name_tokens, fn_tokens, intent_tokens)}
+_fn_token_cache: dict[str, tuple[set[str], set[str], set[str] | None]] = {}
+
+
+def _get_fn_tokens(fn: FunctionNode) -> tuple[set[str], set[str], set[str] | None]:
+    """Get cached tokenized data for a function."""
+    cached = _fn_token_cache.get(fn.id)
+    if cached is not None:
+        return cached
+
+    name_tokens = {stem(w) for w in split_identifier(fn.name)}
+    fn_tokens = tokenize_function(fn)
+    intent_tokens = None
+    if fn.intent:
+        intent_tokens = set(tokenize(fn.intent))
+
+    result = (name_tokens, fn_tokens, intent_tokens)
+    _fn_token_cache[fn.id] = result
+    return result
+
+
+def invalidate_token_cache(fn_ids: list[str] | None = None) -> None:
+    """Clear token cache for specific functions or all."""
+    if fn_ids is None:
+        _fn_token_cache.clear()
+    else:
+        for fid in fn_ids:
+            _fn_token_cache.pop(fid, None)
+
+
 def search_functions(
     graph: Graph,
     intent: str,
@@ -174,27 +204,23 @@ def search_functions(
         if zone and graph.file_zone(fn.file) != zone:
             continue
 
+        name_tokens, fn_tokens, intent_tokens = _get_fn_tokens(fn)
         score = 0.0
 
         # 1. Name token overlap (strongest signal — 0.5 weight)
-        name_tokens = {stem(w) for w in split_identifier(fn.name)}
         if name_tokens:
             name_overlap = len(token_set & name_tokens) / max(len(token_set), 1)
             score += name_overlap * 0.5
 
         # 2. Full signature token overlap (params, types, docstring — 0.3 weight)
-        fn_tokens = tokenize_function(fn)
         if fn_tokens:
             sig_overlap = len(token_set & fn_tokens) / max(len(token_set), 1)
             score += sig_overlap * 0.3
 
-        # 3. Intent field (LLM-generated, future — 0.4 weight)
-        intent_field = getattr(fn, "intent", None)
-        if intent_field:
-            intent_tokens = set(tokenize(intent_field))
-            if intent_tokens:
-                intent_overlap = len(token_set & intent_tokens) / max(len(token_set), 1)
-                score += intent_overlap * 0.4
+        # 3. Intent field (LLM-generated — 0.4 weight)
+        if intent_tokens:
+            intent_overlap = len(token_set & intent_tokens) / max(len(token_set), 1)
+            score += intent_overlap * 0.4
 
         # 4. Caller count bonus (well-used functions = more relevant)
         caller_count = len(graph.callers(fn.id))
