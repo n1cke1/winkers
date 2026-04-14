@@ -69,6 +69,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
 
 <!-- winkers-snippet-version: 0.7.4 -->
+<!-- winkers-snippet-version: 0.8.0 -->
 ## Architectural context (Winkers)
 
 This project uses [Winkers](https://github.com/n1cke1/winkers) for
@@ -81,9 +82,17 @@ data flow, and UI mapping. MCP server `winkers` is connected.
 2. `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
 3. `orient(["rules_list"])` — available coding rule categories; then `rule_read("<category>")` for details.
 
+### Before creating new code
+
+- `before_create(intent="<what you want to create>")` — searches for existing implementations. **Call before writing any new function, class, or module.**
+
 ### After modifying code
 
-- `scope(function="<name>")` — verify callers are not broken by your change.
+- `after_create(file_path="<path>")` — updates graph, checks impact, coherence, duplicates. **Call after every file write.**
+
+### When task is complete
+
+- `session_done()` — session audit. Returns PASS or FAIL. **Do not consider your task finished until this returns PASS.**
 
 ### Key concepts
 

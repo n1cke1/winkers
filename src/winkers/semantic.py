@@ -78,6 +78,17 @@ Target: 1-2KB JSON. Every sentence must be actionable.
    - Do NOT re-propose rules listed under "User dismissed".
    Omit update/remove if empty.
 
+9. COHERENCE RULES. Identify values, counts, names, or constants defined
+   in one file but repeated as literals in other files (templates, configs,
+   docs, README, tests). For each, propose a rule with category="coherence":
+   - fix_approach="derived" if the value can be computed from the source
+     (e.g. len(dict) instead of hardcoded count).
+   - fix_approach="refactor" if it requires architectural change
+     (e.g. extract shared constant).
+   - fix_approach="sync" if manual sync is the only option
+     (e.g. prose in README matching code behavior).
+   Include sync_with listing the files that must stay in sync.
+
 ### QUALITY TEST
 
 Before writing, check each item:

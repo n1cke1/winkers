@@ -156,6 +156,18 @@ def register_tools(
                     "required": ["file_path"],
                 },
             ),
+            Tool(
+                name="session_done",
+                description=(
+                    "Call when your task is complete. Returns PASS or FAIL with"
+                    " specific action items. DO NOT consider your task finished"
+                    " until this returns PASS."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -183,6 +195,8 @@ def register_tools(
             result = _tool_before_create(graph, arguments, root)
         elif name == "after_create":
             result = _tool_after_create(graph, arguments, root, get_graph)
+        elif name == "session_done":
+            result = _tool_session_done(graph, root)
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -280,6 +294,13 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
             "No valid include values. Use: map, conventions, rules_list,"
             " functions_graph, hotspots, routes, ui_map"
         )
+        return result
+
+    # Show session status if active
+    session_info = _session_status(root)
+    if session_info:
+        result["session"] = session_info
+
     return result
 
 
@@ -649,14 +670,24 @@ def _tool_after_create(
     store.update_files(graph, [file_path])
     store.save(graph)
 
-    # 3. Impact analysis
+    # Invalidate search token cache for updated file
+    from winkers.search import invalidate_token_cache
+    file_fn_ids = [
+        fid for fid, fn in graph.functions.items() if fn.file == file_path
+    ]
+    invalidate_token_cache(file_fn_ids)
+
+    # 3. Incremental intent for new/modified functions
+    _generate_incremental_intents(graph, root, [file_path])
+
+    # 4. Impact analysis
     diff = compute_diff(old_sigs, graph, [file_path])
     impact = format_impact(diff)
 
-    # 4. Coherence check
+    # 5. Coherence check
     coherence = _coherence_check(file_path, root)
 
-    # 5. Session state update
+    # 6. Session state update
     session_store = SessionStore(root)
     session = session_store.load_or_create()
 
@@ -744,6 +775,210 @@ def _coherence_check(file_path: str, root: Path) -> list[dict]:
         matches.append(entry)
 
     return matches
+
+
+def _session_status(root: Path) -> dict | None:
+    """Return brief session status if an active session exists."""
+    from winkers.session.state import SessionStore
+
+    session_store = SessionStore(root)
+    session = session_store.load()
+    if session is None:
+        return None
+
+    pending = session.pending_warnings()
+    info: dict = {
+        "writes": len(session.writes),
+        "warnings": len(session.warnings),
+        "warnings_pending": len(pending),
+    }
+    if pending:
+        info["pending"] = [w.detail for w in pending[:3]]
+    return info
+
+
+def _tool_session_done(graph: Graph, root: Path) -> dict:
+    """Session audit: PASS if no unresolved issues, FAIL otherwise."""
+    from winkers.session.state import SessionStore
+
+    session_store = SessionStore(root)
+    session = session_store.load_or_create()
+
+    session.session_done_calls += 1
+    is_first_call = session.session_done_calls == 1
+
+    # Collect issues
+    issues: list[dict] = []
+    recommendations: list[dict] = []
+
+    if is_first_call:
+        # 1. Unresolved broken callers
+        for w in session.pending_warnings():
+            if w.kind == "broken_caller":
+                callers_info = _broken_caller_details(w.target, graph)
+                issues.append({
+                    "kind": "broken_caller",
+                    "detail": w.detail,
+                    "call_sites": callers_info,
+                })
+
+        # 2. Coherence sync_with not modified
+        modified_files = set(session.files_modified())
+        for w in session.pending_warnings():
+            if w.kind != "coherence":
+                continue
+            if w.fix_approach == "sync":
+                # Extract sync_with files from the warning detail
+                sync_files = _extract_sync_files(w, root)
+                unmodified = [f for f in sync_files if f not in modified_files]
+                if unmodified:
+                    issues.append({
+                        "kind": "coherence_sync",
+                        "detail": w.detail,
+                        "unmodified_files": unmodified,
+                    })
+            else:
+                # derived/refactor: don't block, but recommend
+                recommendations.append({
+                    "kind": f"coherence_{w.fix_approach or 'derived'}",
+                    "detail": w.detail,
+                })
+
+        # 3. Complexity delta check
+        cx_issue = _check_complexity_delta(graph, session)
+        if cx_issue:
+            issues.append(cx_issue)
+
+    # Save updated session state
+    session_store.save(session)
+
+    # Build response
+    if not is_first_call:
+        # Anti-loop: PASS with remaining warnings on second+ call
+        result: dict = {
+            "status": "PASS",
+            "note": "Session audit passed (repeat call — remaining warnings logged).",
+            "session": session.summary(),
+        }
+        pending = session.pending_warnings()
+        if pending:
+            result["remaining_warnings"] = [w.detail for w in pending[:5]]
+        return result
+
+    if issues:
+        result = {
+            "status": "FAIL",
+            "issues": issues,
+            "session": session.summary(),
+            "hint": "Fix the issues above and call session_done() again.",
+        }
+        if recommendations:
+            result["recommendations"] = recommendations
+        return result
+
+    result = {
+        "status": "PASS",
+        "session": session.summary(),
+    }
+    if recommendations:
+        result["recommendations"] = recommendations
+        result["note"] = "PASS — but consider these improvements."
+    return result
+
+
+def _generate_incremental_intents(
+    graph: Graph, root: Path, files: list[str],
+) -> None:
+    """Generate intents for new/modified functions (non-blocking)."""
+    try:
+        from winkers.intent.provider import NoneProvider, auto_detect, load_config
+
+        config = load_config(root)
+        provider = auto_detect(config)
+        if isinstance(provider, NoneProvider):
+            return
+
+        for file_path in files:
+            file_node = graph.files.get(file_path)
+            if not file_node:
+                continue
+            src_path = root / file_path
+            if not src_path.exists():
+                continue
+            source = src_path.read_text(encoding="utf-8")
+
+            for fn_id in file_node.function_ids:
+                fn = graph.functions.get(fn_id)
+                if fn is None or fn.intent:
+                    continue
+                intent = provider.generate(fn, source)
+                if intent:
+                    fn.intent = intent
+    except Exception:
+        pass  # Non-blocking: don't fail after_create on intent errors
+
+
+def _broken_caller_details(fn_id: str, graph: Graph) -> list[dict]:
+    """Get call site details for a broken caller warning."""
+    callers = graph.callers(fn_id)
+    return [
+        {
+            "fn": e.source_fn,
+            "file": e.call_site.file,
+            "line": e.call_site.line,
+            "expression": e.call_site.expression,
+        }
+        for e in callers
+    ]
+
+
+def _extract_sync_files(warning, root: Path) -> list[str]:
+    """Extract sync_with file list from a coherence warning."""
+    from winkers.conventions import RulesStore
+
+    rules_file = RulesStore(root).load()
+    # Match by rule id in the warning detail (e.g. "Rule #14")
+    import re
+    match = re.search(r"Rule #(\d+)", warning.detail)
+    if match:
+        rule_id = int(match.group(1))
+        for r in rules_file.rules:
+            if r.id == rule_id:
+                return r.sync_with
+    return []
+
+
+def _check_complexity_delta(graph: Graph, session) -> dict | None:
+    """Check if total complexity grew too much during this session."""
+    if not session.graph_snapshot_at_start:
+        return None
+
+    # Compare complexity of modified files
+    modified_files = set(session.files_modified())
+    if not modified_files:
+        return None
+
+    # Sum current complexity of modified files
+    modified_fns = [
+        fn for fn in graph.functions.values()
+        if fn.file in modified_files
+    ]
+    if not modified_fns:
+        return None
+
+    new_cx = sum(fn.complexity or 0 for fn in modified_fns)
+
+    # Flag if average complexity is very high per function
+    avg_cx = new_cx / len(modified_fns)
+    if avg_cx > 15:
+        return {
+            "kind": "debt_regression",
+            "detail": (
+                f"Average complexity in modified files is {avg_cx:.0f} "
+                f"(threshold: 15). Consider simplifying."
+            ),
+        }
+    return None
 
 
 def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:

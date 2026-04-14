@@ -44,3 +44,4 @@ old/
 SESSION_*.md
 winkers_*.md
 .claude/settings.local.json
+.mcp.json

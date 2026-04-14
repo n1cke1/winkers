@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0
+
+### New features
+
+- **Interactive agent workflow** — Winkers now participates during coding, not just at the start.
+- **`before_create(intent)`** MCP tool — searches existing functions before creating new code. Returns matches with pipeline context (upstream/downstream callers).
+- **`after_create(file_path)`** MCP tool — incremental graph update, impact analysis (signature changes + broken callers), coherence check, session state tracking.
+- **`session_done()`** MCP tool — PASS/FAIL session audit. Blocks task completion if broken callers or unsynced coherence files remain. Anti-loop: FAIL max once.
+- **Claude Code hooks** — 4 automatic hooks installed by `winkers init`:
+  - `UserPromptSubmit` — detects creation intent, injects `before_create` results.
+  - `PreToolUse(Write|Edit)` — AST hash duplicate gate, blocks exact clones.
+  - `PostToolUse(Write|Edit)` — auto `after_create` on every file write.
+  - `Stop` — session audit gate, forces continuation on first FAIL.
+- **LLM intent generation** — per-function one-sentence descriptions via Ollama (gemma3:4b) or Claude API (Haiku). Boosts `before_create` search for cryptic function names.
+- **`winkers intent eval`** CLI — test and compare intent prompts (`--sample N --json`, `--prompt "..." --json`, `--compare`).
+- **Intent eval skill** — `skills/intent_eval/SKILL.md` for prompt tuning workflow.
+- **`.winkers/config.toml`** — configurable intent provider, model, prompt template, temperature.
+- **Coherence rules** — `category="coherence"` rules with `sync_with` and `fix_approach` (sync/derived/refactor). Semantic enricher now proposes them automatically.
+- **orient() session status** — shows active session warnings when session exists.
+
+### Performance
+
+- **Search token cache** — `before_create` search: 1589ms → 74ms (warm) on 837-function project.
+- **Cache invalidation** — automatic on `after_create` for modified files.
+
+### CLI changes
+
+- `winkers init --ollama gemma3:4b` — use specific Ollama model for intent.
+- `winkers init --no-llm` — skip LLM intent generation.
+- `winkers hook <subcommand>` — hook handlers (prompt-enrich, pre-write, post-write, session-audit).
+- `winkers intent eval` — intent generation quality evaluation.
+- CLAUDE.md snippet updated to v0.8.0 with full interactive workflow instructions.
+
 ## 0.7.6
 
 ### New features

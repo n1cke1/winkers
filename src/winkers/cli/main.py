@@ -74,7 +74,12 @@ def _after_command(*_args, **_kwargs):
               help="Accept all proposed rule changes without interactive review.")
 @click.option("--force", "-f", is_flag=True, default=False,
               help="Force semantic re-enrichment even if graph is unchanged.")
-def init(path: str, no_semantic: bool, yes: bool, force: bool):
+@click.option("--ollama", "ollama_model", default=None, type=str,
+              help="Use Ollama for intent generation (e.g. gemma3:4b).")
+@click.option("--no-llm", is_flag=True, default=False,
+              help="Skip LLM intent generation.")
+def init(path: str, no_semantic: bool, yes: bool, force: bool,
+         ollama_model: str | None, no_llm: bool):
     """Build the dependency graph for the project.
 
     Automatically detects your IDE and registers the MCP server:
@@ -127,6 +132,9 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool):
 
     if not no_semantic:
         _run_semantic_enrichment(root, graph, yes=yes, force=force)
+
+    if not no_llm:
+        _run_intent_generation(root, graph, ollama_model=ollama_model)
 
     _autodetect_ide(root)
 
@@ -544,6 +552,113 @@ def _run_debt_analysis(root: Path, graph) -> None:
         )
 
 
+def _run_intent_generation(
+    root: Path, graph, ollama_model: str | None = None,
+) -> None:
+    """Generate per-function LLM intents (Ollama / API / none)."""
+    from winkers.intent.provider import (
+        auto_detect,
+        load_config,
+        save_config,
+    )
+
+    config = load_config(root)
+
+    # CLI overrides
+    if ollama_model:
+        config.provider = "ollama"
+        config.model = ollama_model
+        save_config(root, config)
+
+    provider = auto_detect(config)
+
+    # Skip if NoneProvider
+    from winkers.intent.provider import NoneProvider
+    if isinstance(provider, NoneProvider):
+        click.echo("  ~ Intent generation skipped (no Ollama or API key).")
+        return
+
+    # Find functions without intent
+    needs_intent = [
+        fn for fn in graph.functions.values() if not fn.intent
+    ]
+    if not needs_intent:
+        click.echo(
+            f"  [ok] All {len(graph.functions)} functions already have intents."
+        )
+        return
+
+    # Warmup: verify provider works with a quick test
+    if not _intent_provider_ready(provider, needs_intent[0], root):
+        click.echo("  ~ Intent generation skipped (provider not ready).")
+        return
+
+    click.echo(
+        f"Generating intents for {len(needs_intent)} functions "
+        f"({type(provider).__name__}) ..."
+    )
+
+    generated = 0
+    for i, fn in enumerate(needs_intent):
+        source = _read_fn_source(root, fn)
+        if source is None:
+            continue
+        intent = provider.generate(fn, source)
+        if intent:
+            fn.intent = intent
+            generated += 1
+        if (i + 1) % 20 == 0:
+            click.echo(f"  ... {i + 1}/{len(needs_intent)}")
+
+    if generated:
+        store = GraphStore(root)
+        store.save(graph)
+
+    click.echo(f"  [ok] Generated {generated}/{len(needs_intent)} intents.")
+
+
+def _intent_provider_ready(provider, fn, root: Path) -> bool:
+    """Quick check: can the provider generate an intent?"""
+    source = _read_fn_source(root, fn)
+    if source is None:
+        return False
+    try:
+        # Use a short timeout for the warmup test
+        from winkers.intent.provider import OllamaProvider
+        if isinstance(provider, OllamaProvider):
+            import httpx
+            prompt = provider._build_prompt(fn, source)
+            resp = httpx.post(
+                f"{provider.url}/api/generate",
+                json={
+                    "model": provider.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": provider.temperature,
+                        "num_predict": 20,
+                    },
+                },
+                timeout=10.0,
+            )
+            return resp.status_code == 200
+        # For API provider, assume it works
+        return True
+    except Exception:
+        return False
+
+
+def _read_fn_source(root: Path, fn) -> str | None:
+    """Read source file for a function."""
+    file_path = root / fn.file
+    if not file_path.exists():
+        return None
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+
 def _autodetect_ide(root: Path) -> None:
     """Detect IDE from project files and auto-register MCP server."""
     detected = False
@@ -818,10 +933,79 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
     else:
         click.echo("  [ok] Tool permissions already set.")
 
+    # --- Interactive hooks (before_create, duplicate gate, after_create, session audit) ---
+    changed = _install_interactive_hooks(hooks, hook_bin, root) or changed
+
     if changed:
         settings_path.write_text(
             json.dumps(settings, indent=2), encoding="utf-8",
         )
+
+
+def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
+    """Install UserPromptSubmit, PreToolUse, PostToolUse, Stop hooks."""
+    changed = False
+    root_posix = str(root).replace("\\", "/")
+
+    hook_defs = [
+        {
+            "event": "UserPromptSubmit",
+            "marker": "prompt-enrich",
+            "command": f"{hook_bin} hook prompt-enrich {root_posix}",
+            "timeout": 2,
+            "matcher": "",
+            "label": "prompt-enrich",
+        },
+        {
+            "event": "PreToolUse",
+            "marker": "pre-write",
+            "command": f"{hook_bin} hook pre-write {root_posix}",
+            "timeout": 3,
+            "matcher": "Write|Edit|MultiEdit",
+            "label": "pre-write duplicate gate",
+        },
+        {
+            "event": "PostToolUse",
+            "marker": "post-write",
+            "command": f"{hook_bin} hook post-write {root_posix}",
+            "timeout": 5,
+            "matcher": "Write|Edit|MultiEdit",
+            "label": "post-write auto-update",
+        },
+        {
+            "event": "Stop",
+            "marker": "session-audit",
+            "command": f"{hook_bin} hook session-audit {root_posix}",
+            "timeout": 10,
+            "matcher": "",
+            "label": "session audit gate",
+        },
+    ]
+
+    for hdef in hook_defs:
+        event_hooks = hooks.setdefault(hdef["event"], [])
+        exists = any(
+            hdef["marker"] in h.get("command", "")
+            for entry in event_hooks
+            for h in entry.get("hooks", [])
+        )
+        if exists:
+            click.echo(f"  [ok] {hdef['event']} {hdef['label']} hook already installed.")
+        else:
+            entry: dict = {
+                "hooks": [{
+                    "type": "command",
+                    "command": hdef["command"],
+                    "timeout": hdef["timeout"],
+                }],
+            }
+            if hdef["matcher"]:
+                entry["matcher"] = hdef["matcher"]
+            event_hooks.append(entry)
+            click.echo(f"  [ok] {hdef['event']} {hdef['label']} hook installed.")
+            changed = True
+
+    return changed
 
 
 def _install_cursor(root: Path) -> None:
@@ -1886,6 +2070,121 @@ def search(intent: str, path: str, zone: str, as_json: bool):
             for fn in pipeline.downstream:
                 click.echo(f"     ↓ {fn.name}{_fn_signature(fn)}  [{fn.file}:{fn.line_start}]")
         click.echo()
+
+
+# ---------------------------------------------------------------------------
+# hook subcommands — Claude Code hooks protocol (stdin JSON → stdout JSON)
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def hook():
+    """Claude Code hook handlers (called by hooks, not directly)."""
+
+
+@hook.command("prompt-enrich")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_prompt_enrich(path: str):
+    """UserPromptSubmit hook: detect creation intent, inject before_create."""
+    from winkers.hooks.prompt_enrich import run
+    run(Path(path).resolve())
+
+
+@hook.command("pre-write")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_pre_write(path: str):
+    """PreToolUse hook: AST hash duplicate gate for Write/Edit."""
+    from winkers.hooks.pre_write import run
+    run(Path(path).resolve())
+
+
+@hook.command("post-write")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_post_write(path: str):
+    """PostToolUse hook: auto after_create on file writes."""
+    from winkers.hooks.post_write import run
+    run(Path(path).resolve())
+
+
+@hook.command("session-audit")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_session_audit(path: str):
+    """Stop hook: session audit gate."""
+    from winkers.hooks.session_audit import run
+    run(Path(path).resolve())
+
+
+# ---------------------------------------------------------------------------
+# intent subcommands — LLM intent eval + management
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def intent():
+    """LLM intent generation and evaluation."""
+
+
+@intent.command("eval")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--sample", "-n", default=20, help="Number of functions to sample.")
+@click.option("--prompt", "prompt_override", default=None, type=str,
+              help="Test an alternative prompt template.")
+@click.option("--compare", is_flag=True, default=False,
+              help="Compare existing intents with freshly generated ones.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Output as JSON.")
+def intent_eval(path: str, sample: int, prompt_override: str | None,
+                compare: bool, as_json: bool):
+    """Evaluate intent generation quality.
+
+    \b
+    Examples:
+        winkers intent eval --sample 10 --json
+        winkers intent eval --prompt "Describe this function:" --json
+        winkers intent eval --compare
+    """
+    from winkers.intent.eval_cli import compare_intents, eval_intents
+    from winkers.intent.provider import auto_detect, load_config
+
+    root = Path(path).resolve()
+    store = GraphStore(root)
+    graph = store.load()
+    if graph is None:
+        click.echo("Error: graph not built. Run 'winkers init' first.", err=True)
+        raise SystemExit(1)
+
+    config = load_config(root)
+    provider = auto_detect(config)
+
+    from winkers.intent.provider import NoneProvider
+    if isinstance(provider, NoneProvider):
+        click.echo("Error: no LLM provider available.", err=True)
+        raise SystemExit(1)
+
+    if compare:
+        results = compare_intents(graph, root, provider, sample=sample)
+        if as_json:
+            click.echo(json.dumps(results, indent=2))
+        else:
+            for r in results:
+                changed = "CHANGED" if r["changed"] else "same"
+                click.echo(f"  [{changed}] {r['name']}")
+                click.echo(f"    current: {r['current']}")
+                click.echo(f"    new:     {r['new']}")
+        return
+
+    results = eval_intents(
+        graph, root, provider,
+        sample=sample, prompt_override=prompt_override,
+    )
+
+    if as_json:
+        click.echo(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            click.echo(f"  {r['name']} ({r['file']})")
+            click.echo(f"    sig:    {r['signature']}")
+            click.echo(f"    intent: {r['generated_intent']}")
+            click.echo()
+        click.echo(f"  {len(results)} functions evaluated.")
 
 
 @cli.command()
