@@ -92,21 +92,21 @@ data flow, and UI mapping. MCP server `winkers` is connected.
 
 ### Before modifying code
 
-1. `orient(["map","conventions"])` — project structure, zones, hotspots, data flow, zone intents. **Call first.**
-2. `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
-3. `orient(["rules_list"])` — available coding rule categories; then `rule_read("<category>")` for details.
+1. `orient` with `include: ["map", "conventions"]` — project structure, zones, hotspots, data flow, zone intents. **Call first.**
+2. `scope` with `file: "<path>"` — locked/free functions, callers, related rules for that file.
+3. `orient` with `include: ["rules_list"]` — available coding rule categories; then `rule_read` with `category: "<name>"` for details.
 
 ### Before creating new code
 
-- `before_create(intent="<what you want to create>")` — searches for existing implementations. **Call before writing any new function, class, or module.**
+- `before_create` with `intent: "<what you want to create>"` — searches for existing implementations. **Call before writing any new function, class, or module.**
 
 ### After modifying code
 
-- `after_create(file_path="<path>")` — updates graph, checks impact, coherence, duplicates. **Call after every file write.**
+- `after_create` with `file_path: "<path>"` — updates graph, checks impact, coherence, duplicates. **Call after every file write.**
 
 ### When task is complete
 
-- `session_done()` — session audit. Returns PASS or FAIL. **Do not consider your task finished until this returns PASS.**
+- `session_done` (no args) — session audit. Returns PASS or FAIL. **Do not consider your task finished until this returns PASS.**
 
 ### Key concepts
 
@@ -116,8 +116,8 @@ data flow, and UI mapping. MCP server `winkers` is connected.
 
 ### Other tools
 
-- `orient(["functions_graph"])` — full indexed function list with caller counts.
-- `orient(["routes"])` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
-- `orient(["ui_map"])` — Flask route→template links with UI elements (panels, tables, forms, headings).
-- `orient(["hotspots"])` — functions with many callers; high-impact changes.
-- `convention_read("<zone>")` — zone intent details (e.g. "app.py", "data_flow", "checklist").
+- `orient` with `include: ["functions_graph"]` — full indexed function list with caller counts.
+- `orient` with `include: ["routes"]` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
+- `orient` with `include: ["ui_map"]` — Flask route→template links with UI elements (panels, tables, forms, headings).
+- `orient` with `include: ["hotspots"]` — functions with many callers; high-impact changes.
+- `convention_read` with `target: "<zone>"` — zone intent details (e.g. "app.py", "data_flow", "checklist").

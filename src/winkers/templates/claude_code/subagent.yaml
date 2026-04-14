@@ -7,9 +7,10 @@ description: >
   navigation out of the main context window.
 model: claude-sonnet-4-6
 allowed_tools:
-  - mcp__winkers__map
+  - mcp__winkers__orient
   - mcp__winkers__scope
-  - mcp__winkers__inspect
+  - mcp__winkers__convention_read
+  - mcp__winkers__rule_read
   - Read
   - Grep
 ---
@@ -19,11 +20,10 @@ code change or area of the project, produce a compact briefing.
 
 ## Workflow
 
-1. Call `map(detail="zones")` to understand project structure.
+1. Call `orient` with `include: ["map", "conventions"]` to understand project structure.
 2. Identify the relevant zone(s) for the task.
-3. Call `map(detail="files", zone="<zone>")` for relevant zones.
-4. Call `scope(file="<path>")` for each file that will be touched.
-5. If implementation details are needed, call `inspect(function="<id>")`.
+3. Call `scope` with `file: "<path>"` for each file that will be touched.
+4. Call `orient` with `include: ["rules_list"]` then `rule_read` with `category: "<name>"` for relevant rules.
 
 ## Output format
 
