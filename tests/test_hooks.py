@@ -1,0 +1,337 @@
+"""Tests for Claude Code hooks — stdin/stdout JSON protocol."""
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from winkers.graph import GraphBuilder
+from winkers.hooks.prompt_enrich import extract_intent, has_creation_intent
+from winkers.resolver import CrossFileResolver
+from winkers.session.state import SessionState, SessionStore, Warning, WriteEvent
+from winkers.store import GraphStore
+
+PYTHON_FIXTURE = Path(__file__).parent / "fixtures" / "python_project"
+
+
+@pytest.fixture(scope="module")
+def graph():
+    g = GraphBuilder().build(PYTHON_FIXTURE)
+    CrossFileResolver().resolve(g, str(PYTHON_FIXTURE))
+    return g
+
+
+# ---------------------------------------------------------------------------
+# prompt_enrich — creation intent detection
+# ---------------------------------------------------------------------------
+
+
+class TestCreationIntent:
+    def test_detects_add_function(self):
+        assert has_creation_intent("add a function to validate email")
+
+    def test_detects_create_class(self):
+        assert has_creation_intent("create a new class for user authentication")
+
+    def test_detects_implement_method(self):
+        assert has_creation_intent("implement a method to parse CSV config")
+
+    def test_detects_write_handler(self):
+        assert has_creation_intent("write a new handler for the /api/users endpoint")
+
+    def test_no_intent_on_fix(self):
+        assert not has_creation_intent("fix the bug in calculate_price")
+
+    def test_no_intent_on_refactor(self):
+        assert not has_creation_intent("refactor the database connection logic")
+
+    def test_no_intent_on_explain(self):
+        assert not has_creation_intent("explain how the auth middleware works")
+
+    def test_extract_intent_cleans_noise(self):
+        result = extract_intent("please can you add a function to calculate price")
+        assert "calculate price" in result
+        assert "please" not in result
+
+    def test_extract_intent_truncates(self):
+        long_prompt = "add a function " + "x" * 300
+        result = extract_intent(long_prompt)
+        assert len(result) <= 200
+
+
+# ---------------------------------------------------------------------------
+# prompt_enrich — full hook flow
+# ---------------------------------------------------------------------------
+
+
+class TestPromptEnrichHook:
+    def test_no_creation_intent_exits_silently(self, graph, tmp_path):
+        """Non-creation prompt → exit 0, no output."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "cwd": str(tmp_path),
+            "hook_event_name": "UserPromptSubmit",
+            "user_prompt": "fix the bug in pricing module",
+        })
+
+        from winkers.hooks.prompt_enrich import run
+        with patch("sys.stdin") as mock_stdin, \
+             pytest.raises(SystemExit) as exc_info:
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+        assert exc_info.value.code == 0
+
+    def test_creation_intent_with_matches(self, graph, tmp_path):
+        """Creation prompt with matching functions → additionalContext."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "cwd": str(tmp_path),
+            "hook_event_name": "UserPromptSubmit",
+            "user_prompt": "add a function to calculate price with discount",
+        })
+
+        from winkers.hooks.prompt_enrich import run
+        captured_output = []
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit, \
+             patch("builtins.print", side_effect=lambda x: captured_output.append(x)):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        if captured_output:
+            result = json.loads(captured_output[0])
+            assert "hookSpecificOutput" in result
+            ctx = result["hookSpecificOutput"]["additionalContext"]
+            assert "Winkers" in ctx
+            assert "existing" in ctx.lower() or "implementations" in ctx.lower()
+
+
+# ---------------------------------------------------------------------------
+# post_write — file update hook
+# ---------------------------------------------------------------------------
+
+
+class TestPostWriteHook:
+    def test_non_code_file_exits_silently(self, tmp_path):
+        """Write to .md file → exit 0, no output."""
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(tmp_path / "README.md")},
+        })
+
+        from winkers.hooks.post_write import run
+        with patch("sys.stdin") as mock_stdin, \
+             pytest.raises(SystemExit) as exc_info:
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+        assert exc_info.value.code == 0
+
+    def test_code_file_updates_session(self, graph, tmp_path):
+        """Write to .py file → session state updated."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        # Create the source file so update_files can reparse it
+        modules_dir = tmp_path / "modules"
+        modules_dir.mkdir(parents=True, exist_ok=True)
+        src = PYTHON_FIXTURE / "modules" / "pricing.py"
+        (modules_dir / "pricing.py").write_text(
+            src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(tmp_path / "modules" / "pricing.py")},
+        })
+
+        from winkers.hooks.post_write import run
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit:
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        # Check session state was created
+        session = SessionStore(tmp_path).load()
+        assert session is not None
+        assert len(session.writes) >= 1
+
+    def test_skips_non_write_tools(self, tmp_path):
+        """Non-Write tool → exit 0, no action."""
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/some/file.py"},
+        })
+
+        from winkers.hooks.post_write import run
+        with patch("sys.stdin") as mock_stdin, \
+             pytest.raises(SystemExit) as exc_info:
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+        assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# session_audit — stop hook
+# ---------------------------------------------------------------------------
+
+
+class TestSessionAuditHook:
+    def test_no_session_exits_silently(self, graph, tmp_path):
+        """No session → exit 0, allow stop."""
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "Stop",
+        })
+
+        from winkers.hooks.session_audit import run
+        with patch("sys.stdin") as mock_stdin, \
+             pytest.raises(SystemExit) as exc_info:
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+        assert exc_info.value.code == 0
+
+    def test_clean_session_allows_stop(self, graph, tmp_path):
+        """Session with no warnings → PASS, continue=false."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        session = SessionState(started_at="2026-01-01T00:00:00Z")
+        session.add_write(WriteEvent(timestamp="t1", file_path="a.py"))
+        SessionStore(tmp_path).save(session)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "Stop",
+        })
+
+        captured_output = []
+        from winkers.hooks.session_audit import run
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit, \
+             patch("builtins.print", side_effect=lambda x: captured_output.append(x)):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        assert captured_output
+        result = json.loads(captured_output[0])
+        assert result["continue"] is False
+        assert "PASSED" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_fail_forces_continue(self, graph, tmp_path):
+        """Session with broken callers → FAIL, continue=true."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        session = SessionState(started_at="2026-01-01T00:00:00Z")
+        session.add_write(WriteEvent(timestamp="t1", file_path="modules/pricing.py"))
+        session.add_warning(Warning(
+            kind="broken_caller", severity="error",
+            target="modules/pricing.py::calculate_price",
+            detail="calculate_price() sig changed. 2 callers.",
+        ))
+        SessionStore(tmp_path).save(session)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "Stop",
+        })
+
+        captured_output = []
+        from winkers.hooks.session_audit import run
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit, \
+             patch("builtins.print", side_effect=lambda x: captured_output.append(x)):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        assert captured_output
+        result = json.loads(captured_output[0])
+        assert result["continue"] is True
+        assert "FAILED" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_second_call_allows_stop(self, graph, tmp_path):
+        """Second stop call → PASS (anti-loop), continue=false."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        session = SessionState(started_at="2026-01-01T00:00:00Z")
+        session.add_write(WriteEvent(timestamp="t1", file_path="modules/pricing.py"))
+        session.add_warning(Warning(
+            kind="broken_caller", severity="error",
+            target="modules/pricing.py::calculate_price",
+            detail="sig changed",
+        ))
+        # Simulate first call already happened
+        session.session_done_calls = 1
+        SessionStore(tmp_path).save(session)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "hook_event_name": "Stop",
+        })
+
+        captured_output = []
+        from winkers.hooks.session_audit import run
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit, \
+             patch("builtins.print", side_effect=lambda x: captured_output.append(x)):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        assert captured_output
+        result = json.loads(captured_output[0])
+        assert result["continue"] is False
+
+
+# ---------------------------------------------------------------------------
+# Hook installer
+# ---------------------------------------------------------------------------
+
+
+class TestHookInstaller:
+    def test_install_interactive_hooks(self, tmp_path):
+        """_install_interactive_hooks adds all 4 hook events."""
+        from winkers.cli.main import _install_interactive_hooks
+
+        hooks: dict = {}
+        changed = _install_interactive_hooks(hooks, "winkers", tmp_path)
+
+        assert changed is True
+        assert "UserPromptSubmit" in hooks
+        assert "PreToolUse" in hooks
+        assert "PostToolUse" in hooks
+        assert "Stop" in hooks
+
+        # Check matcher on PreToolUse
+        pre_tool = hooks["PreToolUse"][0]
+        assert pre_tool["matcher"] == "Write|Edit|MultiEdit"
+
+    def test_install_idempotent(self, tmp_path):
+        """Running installer twice doesn't duplicate hooks."""
+        from winkers.cli.main import _install_interactive_hooks
+
+        hooks: dict = {}
+        _install_interactive_hooks(hooks, "winkers", tmp_path)
+        changed = _install_interactive_hooks(hooks, "winkers", tmp_path)
+
+        assert changed is False
+        assert len(hooks["UserPromptSubmit"]) == 1
+        assert len(hooks["Stop"]) == 1
