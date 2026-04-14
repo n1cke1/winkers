@@ -34,6 +34,8 @@ class FunctionNode(BaseModel):
     route: str | None = None          # "/api/products"
     http_method: str | None = None    # "GET", "POST", etc.
     template: str | None = None       # "products/list.html"
+    ast_hash: str | None = None       # normalized AST hash for clone detection
+    intent: str | None = None         # LLM-generated one-sentence description
 
 
 class FileNode(BaseModel):

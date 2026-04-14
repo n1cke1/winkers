@@ -74,4 +74,25 @@ class GraphStore:
         # Re-resolve (full, simpler than partial for now)
         CrossFileResolver().resolve(graph, str(self.root))
 
+        # Compute AST hashes for new/modified functions
+        self._compute_ast_hashes(graph, changed_files)
+
         return graph
+
+    def _compute_ast_hashes(self, graph: Graph, files: list[str]) -> None:
+        """Compute ast_hash for all functions in the given files."""
+        from winkers.detection.duplicates import compute_ast_hash
+
+        for rel in files:
+            file_path = self.root / rel
+            if not file_path.exists():
+                continue
+            source = file_path.read_bytes()
+            file_node = graph.files.get(rel)
+            if file_node is None:
+                continue
+            for fn_id in file_node.function_ids:
+                fn = graph.functions.get(fn_id)
+                if fn is None:
+                    continue
+                fn.ast_hash = compute_ast_hash(source, fn, fn.language)

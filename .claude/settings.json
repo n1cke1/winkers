@@ -26,7 +26,11 @@
       "Bash(twine check:*)",
       "Bash(twine upload:*)",
       "Bash(xxd c:/Development/Winkers/tests/__init__.py)",
-      "Bash(.venv/Scripts/python -m winkers --help)"
+      "Bash(.venv/Scripts/python -m winkers --help)",
+      "Bash(ls c:/Development/Winkers/*.md)",
+      "Bash(xargs ls:*)",
+      "Bash(.venv/Scripts/pytest tests/test_search.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_duplicates.py tests/test_impact.py tests/test_session_state.py -v)"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP"

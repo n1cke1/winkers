@@ -94,6 +94,8 @@ class ConventionRule(BaseModel):
     wrong_approach: str = ""
     related: list[str] = []  # other category names
     affects: list[str] = []  # specific files or zones, used by scope()
+    sync_with: list[str] = []  # files to check when affects change (coherence)
+    fix_approach: str = ""  # "sync" | "derived" | "refactor" (coherence rules)
     source: RuleSource
     created: str  # ISO date YYYY-MM-DD
     stats: RuleStats = RuleStats()
