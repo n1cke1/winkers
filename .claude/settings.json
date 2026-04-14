@@ -15,7 +15,21 @@
       "Bash(ssh root@***REDACTED-VPS***:*)",
       "Bash(ssh -t root@***REDACTED-VPS*** \"timeout 15 claude login 2>&1\")",
       "Bash(git fetch:*)",
-      "Bash(gh repo:*)"
+      "Bash(gh repo:*)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_cli.py -v --tb=short)",
+      "Bash(grep -r \"winkers analyze\\\\|winkers improve\\\\|improve loop\" /c/Development/Winkers/*.md)",
+      "Bash(ls -la /c/Development/Winkers/*.md)",
+      "Bash(.venv/Scripts/pytest tests/test_improve.py -v --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_protect.py -v --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_commit_format.py -v --tb=short)",
+      "Bash(pip install:*)",
+      "Bash(twine check:*)",
+      "Bash(twine upload:*)",
+      "Bash(xxd c:/Development/Winkers/tests/__init__.py)",
+      "Bash(.venv/Scripts/python -m winkers --help)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\NP"
     ]
   },
   "hooks": {

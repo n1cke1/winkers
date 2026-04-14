@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.6
+
+### New features
+
+- **winkers autocommit** — AI-generated commit messages via Haiku with file/function fallback. Replaces generic `wip: auto-commit` in SessionEnd hook.
+- **winkers commits --enrich** — retroactive enrichment of old commits via Haiku + session context matching by timestamp.
+- **Expanded doctor** — checks venv isolation (pipx/project/global), CLAUDE.md snippet version and position, SessionEnd hook, rules, protect chain, commit format, git hooksPath, sessions, insights.
+- **{datetime} template variable** — `YYYY-MM-DD HH:MM` in commit format templates.
+- **.mcp.json absolute path** — MCP server config now uses full project path instead of `.`.
+
+### Fixes
+
+- Conventional commit scope: `feat(TICKET): msg` no longer leaves empty parens after normalization.
+- CLAUDE.md snippet inserted after first `# ` heading, not appended to end.
+- Doctor warns if Winkers section is positioned near end of CLAUDE.md.
+
+### Updated
+
+- All templates (claude_md_snippet, cursor/winkers.mdc, AGENTS.md, SKILL.md) updated to current API (orient/scope/rule_read/convention_read).
+- CLI help text lists all commands including analyze, improve, protect, doctor, hooks.
+
 ## 0.7.5
 
 ### New features

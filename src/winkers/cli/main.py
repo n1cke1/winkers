@@ -30,25 +30,24 @@ def cli(ctx: click.Context):
     Quick start:
       1. Set API key:  set ANTHROPIC_API_KEY=sk-ant-...
          (or create .env file in project root)
-      2. winkers init          Build graph + semantic
-      3. winkers serve         Start MCP server for AI agents
-      4. winkers dashboard     Open browser graph
+      2. winkers init           Build graph + semantic + register MCP
+      3. winkers doctor         Verify everything is set up
+      4. winkers dashboard      Open browser graph
 
     \b
-    Session recording (learn from agent sessions):
-      winkers record             Record unrecorded sessions (catch-up)
-      winkers record --catch-up  Same -- scan all transcripts, record new ones
+    Improve loop (learn from agent sessions):
+      winkers record            Record unrecorded sessions
+      winkers analyze           Find knowledge gaps via Haiku
+      winkers improve           Show insights (--apply to inject)
 
     \b
-    Recording is NOT active by default. To enable automatic recording
-    after every Claude Code session, add a SessionEnd hook:
+    Project protection:
+      winkers protect --startup Trace startup import chain
+      winkers hooks             Install commit format + git hooks
+      winkers commits --enrich  AI-powered commit message enrichment
 
     \b
-      .claude/settings.json -> hooks -> SessionEnd ->
-        { "type": "command", "command": "winkers record --hook" }
-
-    \b
-    Without the hook, run  winkers record  manually to catch up.
+    Recording + autocommit hooks are installed automatically by init.
     """
 
 
