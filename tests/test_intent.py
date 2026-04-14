@@ -7,6 +7,7 @@ import pytest
 
 from winkers.graph import GraphBuilder
 from winkers.intent.provider import (
+    ApiProvider,
     IntentConfig,
     NoneProvider,
     OllamaProvider,
@@ -87,24 +88,22 @@ class TestAutoDetect:
         provider = auto_detect(config)
         assert isinstance(provider, OllamaProvider)
 
-    @patch("winkers.intent.provider._ollama_available", return_value=True)
-    def test_auto_detects_ollama(self, mock_ollama):
+    def test_auto_prefers_api_over_ollama(self):
+        """auto mode uses API if key available, never Ollama."""
         config = IntentConfig(provider="auto")
-        provider = auto_detect(config)
-        assert isinstance(provider, OllamaProvider)
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
+            provider = auto_detect(config)
+            assert isinstance(provider, ApiProvider)
 
-    @patch("winkers.intent.provider._ollama_available", return_value=False)
-    def test_auto_falls_back_to_none(self, mock_ollama):
-        """No Ollama, no API key → NoneProvider."""
+    def test_auto_falls_back_to_none(self):
+        """No API key → NoneProvider (Ollama not tried in auto mode)."""
         config = IntentConfig(provider="auto")
-        with patch.dict("os.environ", {}, clear=True):
-            # Remove ANTHROPIC_API_KEY if present
-            import os
-            env = {k: v for k, v in os.environ.items()
-                   if k != "ANTHROPIC_API_KEY"}
-            with patch.dict("os.environ", env, clear=True):
-                provider = auto_detect(config)
-                assert isinstance(provider, NoneProvider)
+        import os
+        env = {k: v for k, v in os.environ.items()
+               if k != "ANTHROPIC_API_KEY"}
+        with patch.dict("os.environ", env, clear=True):
+            provider = auto_detect(config)
+            assert isinstance(provider, NoneProvider)
 
 
 # ---------------------------------------------------------------------------
