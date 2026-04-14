@@ -5,9 +5,18 @@
   <h1>Dashboard</h1>
   <div class="panel" id="main-panel">
     <form action="/products" method="POST" id="search-form">
-      <input type="text" name="q">
+      <input type="text" name="q" id="inp-search" placeholder="Search...">
     </form>
   </div>
   <div id="sidebar-section">Sidebar</div>
+  <div class="ltab" data-tab="results">Результаты</div>
+  <div class="calc-subtab" data-csub="formulas">Формулы</div>
+  <button id="btn-calculate" onclick="runCalculate()">Рассчитать</button>
+  <select id="inp-objective" name="objective">
+    <option value="min">Min</option>
+  </select>
+  <textarea id="chat-input" name="message" placeholder="Type here..."></textarea>
+  <div id="topbar">Top</div>
+  <span id="server-status">OK</span>
 </body>
 </html>
