@@ -566,17 +566,26 @@ def _autodetect_ide(root: Path) -> None:
 
 
 def _update_gitignore(root: Path) -> None:
-    """Add .winkers/ to project .gitignore if not already present."""
+    """Add .winkers/ and .mcp.json to project .gitignore if not already present."""
     gitignore = root / ".gitignore"
-    entry = ".winkers/"
+    entries = [".winkers/", ".mcp.json"]
+
+    existing = ""
     if gitignore.exists():
-        content = gitignore.read_text(encoding="utf-8")
-        if entry in content:
-            return
-        gitignore.write_text(content.rstrip() + f"\n{entry}\n", encoding="utf-8")
-    else:
-        gitignore.write_text(f"{entry}\n", encoding="utf-8")
-    click.echo(f"  [ok] Added {entry} to .gitignore")
+        existing = gitignore.read_text(encoding="utf-8")
+
+    added = []
+    for entry in entries:
+        if entry not in existing:
+            added.append(entry)
+
+    if not added:
+        return
+
+    block = "\n".join(added) + "\n"
+    new_content = existing.rstrip() + "\n" + block if existing else block
+    gitignore.write_text(new_content, encoding="utf-8")
+    click.echo(f"  [ok] Added {', '.join(added)} to .gitignore")
 
 
 def _templates_dir() -> Path:
