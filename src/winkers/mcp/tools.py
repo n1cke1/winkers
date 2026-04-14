@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,52 @@ def register_tools(
                     "required": ["category"],
                 },
             ),
+            Tool(
+                name="before_create",
+                description=(
+                    "CALL THIS BEFORE writing any new function, class, or module."
+                    " Searches the project graph for existing implementations matching"
+                    " your intent. Returns reusable code with import paths and pipeline"
+                    " context (upstream callers + downstream callees), or conventions"
+                    " for writing new code in the target zone."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "description": (
+                                "What you want to create, in natural language."
+                                " Examples: 'validate email', 'calculate price',"
+                                " 'parse CSV config', 'send notification'"
+                            ),
+                        },
+                        "zone": {
+                            "type": "string",
+                            "description": "Zone to search in. Empty = search all zones.",
+                        },
+                    },
+                    "required": ["intent"],
+                },
+            ),
+            Tool(
+                name="after_create",
+                description=(
+                    "Call after writing or modifying code. Updates the project graph"
+                    " and checks for issues. Returns impact analysis for changed"
+                    " functions, coherence checklist, and session status summary."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Relative path to the modified file",
+                        },
+                    },
+                    "required": ["file_path"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -132,6 +179,10 @@ def register_tools(
             result = _tool_convention_read(arguments, root)
         elif name == "rule_read":
             result = _tool_rule_read(arguments, root)
+        elif name == "before_create":
+            result = _tool_before_create(graph, arguments, root)
+        elif name == "after_create":
+            result = _tool_after_create(graph, arguments, root, get_graph)
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -571,6 +622,141 @@ def _tool_rule_read(args: dict, root: Path) -> dict:
             for r in matches
         ],
     }
+
+
+def _tool_after_create(
+    graph: Graph, args: dict, root: Path,
+    get_graph: Callable[[], Graph | None],
+) -> dict:
+    from datetime import datetime
+
+    from winkers.detection.impact import compute_diff, format_impact, snapshot_signatures
+    from winkers.session.state import SessionStore, Warning, WriteEvent
+    from winkers.store import GraphStore
+
+    file_path = args.get("file_path", "")
+    if not file_path:
+        return {"error": "Provide 'file_path' — relative path to the modified file."}
+
+    # Normalize path separators
+    file_path = file_path.replace("\\", "/")
+
+    # 1. Snapshot old signatures before update
+    old_sigs = snapshot_signatures(graph, [file_path])
+
+    # 2. Incremental graph update
+    store = GraphStore(root)
+    store.update_files(graph, [file_path])
+    store.save(graph)
+
+    # 3. Impact analysis
+    diff = compute_diff(old_sigs, graph, [file_path])
+    impact = format_impact(diff)
+
+    # 4. Coherence check
+    coherence = _coherence_check(file_path, root)
+
+    # 5. Session state update
+    session_store = SessionStore(root)
+    session = session_store.load_or_create()
+
+    event = WriteEvent(
+        timestamp=datetime.now(UTC).isoformat(),
+        file_path=file_path,
+        functions_added=[fn.name for fn in diff.added],
+        functions_modified=[sc.fn.name for sc in diff.signature_changed],
+        functions_removed=diff.removed,
+        signature_changes=[
+            {"fn_id": sc.fn_id, "old_sig": sc.old_signature, "new_sig": sc.new_signature}
+            for sc in diff.signature_changed
+        ],
+    )
+    session.add_write(event)
+
+    # Add warnings for broken callers
+    for sc in diff.signature_changed:
+        if sc.callers:
+            session.add_warning(Warning(
+                kind="broken_caller",
+                severity="error" if len(sc.callers) > 0 else "warning",
+                target=sc.fn_id,
+                detail=(
+                    f"{sc.fn.name}() signature changed: {sc.old_signature} → {sc.new_signature}. "
+                    f"{len(sc.callers)} caller(s) may need updating."
+                ),
+            ))
+
+    # Add warnings for coherence rules
+    for rule in coherence:
+        session.add_warning(Warning(
+            kind="coherence",
+            severity="warning",
+            target=file_path,
+            detail=f"Rule #{rule['id']} \"{rule['title']}\": check {', '.join(rule['sync_with'])}",
+            fix_approach=rule.get("fix_approach", "sync"),
+        ))
+
+    session_store.save(session)
+
+    # Build response
+    result: dict = {"file": file_path}
+
+    if impact:
+        result["impact"] = impact
+
+    if coherence:
+        result["coherence"] = coherence
+
+    result["session"] = session.summary()
+
+    if session.pending_warnings():
+        result["session"]["pending"] = [
+            w.detail for w in session.pending_warnings()[:5]
+        ]
+        result["session"]["hint"] = "Call session_done() when complete."
+
+    return result
+
+
+def _coherence_check(file_path: str, root: Path) -> list[dict]:
+    """Find coherence rules where 'affects' matches the modified file."""
+    from winkers.conventions import RulesStore
+
+    rules_file = RulesStore(root).load()
+    matches: list[dict] = []
+
+    for r in rules_file.rules:
+        if r.category != "coherence":
+            continue
+        # Check if file_path matches any entry in r.affects
+        if not any(file_path == a or file_path.endswith(a) for a in r.affects):
+            continue
+
+        entry: dict = {
+            "id": r.id,
+            "title": r.title,
+            "content": r.content,
+            "sync_with": r.sync_with,
+            "fix_approach": r.fix_approach or "sync",
+        }
+        if r.wrong_approach:
+            entry["wrong_approach"] = r.wrong_approach
+        matches.append(entry)
+
+    return matches
+
+
+def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
+    from winkers.search import format_before_create_response, search_functions
+
+    intent = args.get("intent", "")
+    zone = args.get("zone", "")
+
+    if not intent:
+        return {"error": "Provide 'intent' — what you want to create."}
+
+    matches = search_functions(graph, intent, zone=zone)
+    return format_before_create_response(graph, intent, matches, zone=zone, root=root)
 
 
 # ---------------------------------------------------------------------------
