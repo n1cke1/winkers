@@ -22,6 +22,12 @@ def test_scan_templates_index_elements():
     assert "h1" in kinds
     assert "form" in kinds
     assert "panel" in kinds
+    assert "tab" in kinds
+    assert "button" in kinds
+    assert "input" in kinds
+    assert "select" in kinds
+    assert "textarea" in kinds
+    assert "indicator" in kinds
 
 
 def test_scan_templates_index_h1_text():
@@ -83,6 +89,75 @@ def test_section_ui_map_via_orient(tmp_path):
     result = _section_ui_map(graph, zone_filter=None)
     assert result["count"] >= 2
     assert "/" in result["routes"]
+
+
+def test_scan_templates_tab_with_text():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    tabs = [e for e in elements if e["kind"] == "tab"]
+    assert len(tabs) >= 1
+    # data-tab tab should have text
+    main_tab = next(e for e in tabs if e.get("data-tab") == "results")
+    assert main_tab["text"] == "Результаты"
+
+
+def test_scan_templates_subtab():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    tabs = [e for e in elements if e["kind"] == "tab"]
+    subtab = next((e for e in tabs if "data-csub" in e), None)
+    assert subtab is not None
+    assert subtab["data-csub"] == "formulas"
+    assert subtab["text"] == "Формулы"
+
+
+def test_scan_templates_button():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    btn = next(e for e in elements if e["kind"] == "button")
+    assert btn["id"] == "btn-calculate"
+    assert btn["onclick"] == "runCalculate()"
+    assert "Рассчитать" in btn["text"]
+
+
+def test_scan_templates_input():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    inp = next(e for e in elements if e["kind"] == "input")
+    assert inp["id"] == "inp-search"
+    assert inp["type"] == "text"
+    assert inp["placeholder"] == "Search..."
+
+
+def test_scan_templates_select():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    sel = next(e for e in elements if e["kind"] == "select")
+    assert sel["id"] == "inp-objective"
+    assert sel["name"] == "objective"
+
+
+def test_scan_templates_textarea():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    ta = next(e for e in elements if e["kind"] == "textarea")
+    assert ta["id"] == "chat-input"
+    assert ta["placeholder"] == "Type here..."
+
+
+def test_scan_templates_indicator():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    ind = next(e for e in elements if e["kind"] == "indicator")
+    assert ind["id"] == "server-status"
+
+
+def test_panel_re_extended():
+    result = scan_templates(FLASK_FIXTURE)
+    elements = result["templates/index.html"]
+    panels = [e for e in elements if e["kind"] == "panel"]
+    panel_ids = [p["id"] for p in panels]
+    assert "topbar" in panel_ids
 
 
 def test_section_ui_map_empty_graph():

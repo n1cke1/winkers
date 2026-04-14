@@ -11,45 +11,97 @@ from winkers.models import Graph
 _TEMPLATE_EXTS = {".html", ".jinja2", ".j2"}
 _IGNORE = {"node_modules", ".venv", "venv", "__pycache__", ".git", "dist", "build"}
 _RENDER_RE = re.compile(r'render_template\(\s*["\']([^"\']+)["\']')
-_PANEL_RE = re.compile(r"panel|modal|section|card|pane|wrap|container", re.IGNORECASE)
+_PANEL_RE = re.compile(
+    r"panel|modal|section|card|pane|wrap|container|toolbar|strip|bar|overlay|toast|loading",
+    re.IGNORECASE,
+)
+_TAB_ATTR_RE = re.compile(r"^data-.*(?:tab|sub)")
+_TAB_CLASS_RE = re.compile(r"tab|subtab", re.IGNORECASE)
 
 
 class _ElementCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.elements: list[dict] = []
-        self._capture_text: str | None = None  # "h1" | "h2"
+        self._capture_text: str | None = None  # tag name being captured
         self._pending: dict | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
+        id_val = attr.get("id", "") or ""
+        class_val = attr.get("class", "") or ""
+
         if tag in ("h1", "h2"):
             self._capture_text = tag
             self._pending = {"kind": tag, "text": ""}
+
         elif tag == "table":
-            self.elements.append({"kind": "table", "id": attr.get("id", "")})
+            self.elements.append({"kind": "table", "id": id_val})
+
         elif tag == "form":
             self.elements.append({
                 "kind": "form",
                 "action": attr.get("action", ""),
                 "method": (attr.get("method") or "GET").upper(),
-                "id": attr.get("id", ""),
+                "id": id_val,
             })
-        elif tag == "div":
-            id_val = attr.get("id", "") or ""
-            class_val = attr.get("class", "") or ""
-            if "data-tab" in attr:
-                self.elements.append({
+
+        elif tag == "button":
+            entry: dict = {"kind": "button", "id": id_val}
+            if attr.get("onclick"):
+                entry["onclick"] = attr["onclick"]
+            # Capture text content
+            self._capture_text = "button"
+            self._pending = {**entry, "text": ""}
+
+        elif tag == "input":
+            self.elements.append({
+                "kind": "input",
+                "id": id_val,
+                "type": attr.get("type", "text"),
+                "name": attr.get("name", ""),
+                "placeholder": attr.get("placeholder", ""),
+            })
+
+        elif tag == "select":
+            self.elements.append({
+                "kind": "select",
+                "id": id_val,
+                "name": attr.get("name", ""),
+            })
+
+        elif tag == "textarea":
+            self.elements.append({
+                "kind": "textarea",
+                "id": id_val,
+                "name": attr.get("name", ""),
+                "placeholder": attr.get("placeholder", ""),
+            })
+
+        elif tag in ("div", "li", "a"):
+            # Tab / sub-tab detection: data-tab, data-*sub*, data-*tab*
+            tab_attr = next(
+                (k for k in attr if _TAB_ATTR_RE.match(k)), None,
+            )
+            if tab_attr is not None:
+                self._capture_text = tag
+                self._pending = {
                     "kind": "tab",
-                    "data-tab": attr["data-tab"],
+                    tab_attr: attr[tab_attr],
                     "id": id_val,
-                })
-            elif _PANEL_RE.search(id_val) or _PANEL_RE.search(class_val):
+                    "text": "",
+                }
+            elif tag == "div" and (
+                _PANEL_RE.search(id_val) or _PANEL_RE.search(class_val)
+            ):
                 self.elements.append({
                     "kind": "panel",
                     "id": id_val,
                     "class": class_val,
                 })
+
+        elif tag == "span" and id_val:
+            self.elements.append({"kind": "indicator", "id": id_val})
 
     def handle_data(self, data: str) -> None:
         if self._pending is not None:
@@ -57,8 +109,7 @@ class _ElementCollector(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if self._pending is not None and tag == self._capture_text:
-            if self._pending["text"]:
-                self.elements.append(self._pending)
+            self.elements.append(self._pending)
             self._pending = None
             self._capture_text = None
 
