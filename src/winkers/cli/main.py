@@ -75,7 +75,8 @@ def _after_command(*_args, **_kwargs):
 @click.option("--force", "-f", is_flag=True, default=False,
               help="Force semantic re-enrichment even if graph is unchanged.")
 @click.option("--ollama", "ollama_model", default=None, type=str,
-              help="Use Ollama for intent generation (e.g. gemma3:4b).")
+              help="Use Ollama for intent generation (e.g. gemma3:4b). "
+                   "Saved to .winkers/config.toml for future runs.")
 @click.option("--no-llm", is_flag=True, default=False,
               help="Skip LLM intent generation.")
 def init(path: str, no_semantic: bool, yes: bool, force: bool,
@@ -99,6 +100,14 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
 
     If the key is not set, init still works -- semantic is skipped.
     Use --no-semantic to skip explicitly.
+
+    \b
+    Intent generation (per-function descriptions for better search):
+      Default: uses Claude API (Haiku) if ANTHROPIC_API_KEY is set.
+      --ollama gemma3:4b   Use local Ollama instead (must be installed).
+      --no-llm             Skip intent generation entirely.
+      Intents are only generated during init, not during after_create,
+      unless you explicitly set provider in .winkers/config.toml.
 
     \b
     Corporate SSL proxy? Two options:
@@ -575,7 +584,10 @@ def _run_intent_generation(
     # Skip if NoneProvider
     from winkers.intent.provider import NoneProvider
     if isinstance(provider, NoneProvider):
-        click.echo("  ~ Intent generation skipped (no Ollama or API key).")
+        click.echo(
+            "  ~ Intent generation skipped (no API key)."
+            " Use --ollama MODEL for local generation."
+        )
         return
 
     # Find functions without intent
@@ -2143,6 +2155,9 @@ def intent():
 def intent_eval(path: str, sample: int, prompt_override: str | None,
                 compare: bool, as_json: bool):
     """Evaluate intent generation quality.
+
+    Requires a configured provider: ANTHROPIC_API_KEY (default)
+    or --ollama in .winkers/config.toml.
 
     \b
     Examples:
