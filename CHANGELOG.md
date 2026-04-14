@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1 (unreleased)
+
+### Fixes
+
+- **Hook path auto-update** — `winkers init` now updates stale hook paths (e.g. Linux→Windows) instead of skipping or duplicating.
+- **Autocommit marker mismatch** — hook check looked for "auto-commit" but command was "autocommit"; caused duplicate hooks on every init.
+- **Intent provider defaults** — `auto` mode now uses Claude API (Haiku) if key available; Ollama only when explicitly set via `--ollama` or config.toml. Prevents slow Ollama detection.
+- **No surprise intents in after_create** — incremental intent generation only runs if provider was explicitly configured, not on "auto"/"none".
+- **ui_map expanded** — buttons, inputs, select, textarea, sub-tabs (data-*sub*), span indicators, extended panel regex (toolbar, strip, bar, overlay, toast, loading).
+
 ## 0.8.0
 
 ### New features
