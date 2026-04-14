@@ -19,23 +19,25 @@ dependency graph and avoid breaking callers.
 ## Workflow
 
 1. **Understand structure**
-   `map()` — constraints, conventions, zones, hotspots. Call first.
+   `orient(["map","conventions"])` — zones, hotspots, data flow, zone intents. Call first.
 
 2. **Inspect the area**
-   `map(zone="<zone>")` or `map(file="<path>")` — narrow to specific zone/file.
+   `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
 
-3. **Get constraints**
-   `scope(file="<path>")` — for each file you'll modify.
-   Returns locked functions, their callers, safe vs breaking changes.
+3. **Get rules**
+   `orient(["rules_list"])` — available coding rule categories.
+   `rule_read("<category>")` — detailed rules with wrong_approach.
 
 4. **After writing code**
    `scope(function="<name>")` — verify callers are not broken.
 
 ## Other tools
 
-- `functions_graph()` — full indexed function list with caller counts.
-- `hotspots()` — functions with many callers; high-impact to change.
-- `routes()` — HTTP endpoints: method, path, handler, callees.
+- `orient(["functions_graph"])` — full indexed function list with caller counts.
+- `orient(["hotspots"])` — functions with many callers; high-impact to change.
+- `orient(["routes"])` — HTTP endpoints: method, path, handler, callees.
+- `orient(["ui_map"])` — route-to-template links with UI elements.
+- `convention_read("<zone>")` — zone intent details, data_flow, checklist.
 
 ## Key rules
 
