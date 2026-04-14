@@ -220,7 +220,11 @@ class ApiProvider(IntentProvider):
 # ---------------------------------------------------------------------------
 
 def auto_detect(config: IntentConfig) -> IntentProvider:
-    """Detect available provider: Ollama → API → None."""
+    """Detect available provider based on config.
+
+    Explicit: "ollama", "api", "none" → use that provider.
+    "auto" → API if key available, else None. Ollama only if explicit.
+    """
     if config.provider == "none":
         return NoneProvider()
     if config.provider == "ollama":
@@ -228,17 +232,12 @@ def auto_detect(config: IntentConfig) -> IntentProvider:
     if config.provider == "api":
         return ApiProvider(config)
 
-    # auto: try Ollama first (server running + model pulled)
-    if _ollama_available(config.ollama_url, config.model):
-        log.info("Intent provider: Ollama (%s)", config.model)
-        return OllamaProvider(config)
-
-    # Fallback to API
+    # auto: prefer API (fast, reliable), skip Ollama unless explicit
     if os.environ.get("ANTHROPIC_API_KEY"):
         log.info("Intent provider: API (%s)", config.api_model)
         return ApiProvider(config)
 
-    log.info("Intent provider: none (no Ollama or API key)")
+    log.info("Intent provider: none (set ANTHROPIC_API_KEY or provider='ollama')")
     return NoneProvider()
 
 

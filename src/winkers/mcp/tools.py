@@ -889,11 +889,19 @@ def _tool_session_done(graph: Graph, root: Path) -> dict:
 def _generate_incremental_intents(
     graph: Graph, root: Path, files: list[str],
 ) -> None:
-    """Generate intents for new/modified functions (non-blocking)."""
+    """Generate intents for new/modified functions (non-blocking).
+
+    Only runs if intent provider was explicitly configured (not "auto").
+    This prevents surprise API calls during after_create.
+    """
     try:
         from winkers.intent.provider import NoneProvider, auto_detect, load_config
 
         config = load_config(root)
+        # Only generate if user explicitly chose a provider
+        if config.provider in ("auto", "none"):
+            return
+
         provider = auto_detect(config)
         if isinstance(provider, NoneProvider):
             return
