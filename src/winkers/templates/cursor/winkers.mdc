@@ -19,25 +19,32 @@ dependency graph and avoid breaking callers.
 ## Workflow
 
 1. **Understand structure**
-   `orient(["map","conventions"])` — zones, hotspots, data flow, zone intents. Call first.
+   `orient` with `include: ["map", "conventions"]` — zones, hotspots, data flow, zone intents. Call first.
 
 2. **Inspect the area**
-   `scope(file="<path>")` — locked/free functions, callers, related rules for that file.
+   `scope` with `file: "<path>"` — locked/free functions, callers, related rules for that file.
 
 3. **Get rules**
-   `orient(["rules_list"])` — available coding rule categories.
-   `rule_read("<category>")` — detailed rules with wrong_approach.
+   `orient` with `include: ["rules_list"]` — available coding rule categories.
+   `rule_read` with `category: "<name>"` — detailed rules with wrong_approach.
 
-4. **After writing code**
-   `scope(function="<name>")` — verify callers are not broken.
+4. **Before creating new code**
+   `before_create` with `intent: "<what you want>"` — search existing functions.
+
+5. **After writing code**
+   `after_create` with `file_path: "<path>"` — updates graph, checks impact.
+   `scope` with `function: "<name>"` — verify callers are not broken.
+
+6. **When done**
+   `session_done` (no args) — PASS/FAIL audit. Do not finish until PASS.
 
 ## Other tools
 
-- `orient(["functions_graph"])` — full indexed function list with caller counts.
-- `orient(["hotspots"])` — functions with many callers; high-impact to change.
-- `orient(["routes"])` — HTTP endpoints: method, path, handler, callees.
-- `orient(["ui_map"])` — route-to-template links with UI elements.
-- `convention_read("<zone>")` — zone intent details, data_flow, checklist.
+- `orient` with `include: ["functions_graph"]` — full indexed function list with caller counts.
+- `orient` with `include: ["hotspots"]` — functions with many callers; high-impact to change.
+- `orient` with `include: ["routes"]` — HTTP endpoints: method, path, handler, callees.
+- `orient` with `include: ["ui_map"]` — route-to-template links with UI elements.
+- `convention_read` with `target: "<zone>"` — zone intent details, data_flow, checklist.
 
 ## Key rules
 

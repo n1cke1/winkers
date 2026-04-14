@@ -25,15 +25,14 @@ def register_tools(
             Tool(
                 name="orient",
                 description=(
-                    "IMPORTANT: Call this FIRST. Specify what you need via 'include'."
+                    "IMPORTANT: Call this FIRST. Pass include as a JSON array of strings."
                     " 'map' = project structure, zones, hotspots, data flow."
                     " 'conventions' = domain context, zone intents, business logic."
                     " 'rules_list' = coding rules grouped by category."
                     " 'functions_graph' = indexed call graph."
                     " 'hotspots' = high-impact functions."
                     " 'routes' = HTTP endpoints."
-                    " 'ui_map' = route→template links with UI elements (panels, tables, forms)."
-                    " Combine: include=['map','conventions']."
+                    " 'ui_map' = route→template links with UI elements."
                     " Then use convention_read/rule_read for details."
                 ),
                 inputSchema={
