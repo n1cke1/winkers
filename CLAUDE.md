@@ -72,10 +72,10 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ## MCP tools (7 total)
 
 - `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "ui_map". Shows session status if active.
-- `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes
+- `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes. Function-level response also returns pre-computed `impact` (risk_level/safe+dangerous ops/classified callers/action_plan) and `similar_logic` (functions sharing `secondary_intents`) when impact.json exists.
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
 - `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
-- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph; for `change` returns adaptive payload (`files` block with coupling/migration_cost/safe_alternative, `functions` block with affected_fns + caller expressions, or both)
+- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph; for `change` returns adaptive payload (`files` block with coupling/migration_cost/safe_alternative, `functions` block with affected_fns + caller expressions + `risk_level` + `dangerous_operations`, and a `similar_logic` warning when the target shares `secondary_intents` with other functions)
 - `impact_check(file_path)` — incremental graph update, impact analysis, coherence check, session state (renamed from `after_create` in 0.8.1)
 - `session_done()` — optional final session audit across all writes; anti-loop (FAIL max once)
 
@@ -94,7 +94,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<what you want to do>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions, or safe alternatives. **Call before writing any code.**
+2. `before_create` with `intent: "<what you want to do>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions + `risk_level` / `dangerous_operations`, `similar_logic` warnings for duplicated `secondary_intents`, or safe alternatives. **Call before writing any code.**
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
@@ -102,9 +102,9 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 | Tool | When |
 |------|------|
-| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `scope` with `file` or `function` | drill into coupling, caller expressions, pre-computed `impact` (risk / safe+dangerous ops / classified callers / action plan), `similar_logic` (shared `secondary_intents`) |
 | `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory; `hotspots` entries carry `risk_level` when impact.json exists |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 
@@ -112,3 +112,5 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 - **locked** — has callers; don't change signature without updating them.
 - **free** — no callers; modify freely.
+- **impact / risk_level** — LLM-assessed `low`/`medium`/`high`/`critical` per function, with `safe_operations` / `dangerous_operations` / classified callers / `action_plan`. Pre-computed at init time; appears in `scope(function=).impact` and `hotspots`.
+- **secondary_intents** — inline sub-task tags (e.g. `"email validation"`). `scope.similar_logic` and `before_create.similar_logic` group functions sharing tags — consider extracting instead of duplicating.
