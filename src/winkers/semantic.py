@@ -192,13 +192,16 @@ def _select_data_flow_targets(
     """Pick functions to seed the `data_flow` narrative.
 
     Strategy (deterministic, no LLM):
-    1. All route handlers — true entry points, always include first.
-    2. Top-N remaining by (callers + callees), excluding dunders/private,
-       requiring at least one edge so we don't list isolated functions.
+    1. A few route handlers (capped at ~25% of slots), ranked by their own
+       degree so resolved routes win over isolated ones — gives the agent
+       entry-point anchors.
+    2. Top remaining by (callers + callees), excluding dunders/private and
+       requiring at least one edge so we don't list isolated helpers.
 
-    Capped at `max_total`. Returned in selection order: routes first, then
-    centrality-sorted descending. Caller centrality is computed once via
-    a degree map to avoid O(F*E) scans on large graphs.
+    Routes are capped because in projects where the resolver can't see
+    DI-injected service calls (FastAPI `Depends`), every route looks
+    isolated and would otherwise crowd out the actually-central service
+    and domain functions that *do* show data flow.
     """
     # Precompute degrees once: avoids quadratic graph.callers/callees calls.
     in_deg: dict[str, int] = {}
@@ -207,27 +210,30 @@ def _select_data_flow_targets(
         in_deg[edge.target_fn] = in_deg.get(edge.target_fn, 0) + 1
         out_deg[edge.source_fn] = out_deg.get(edge.source_fn, 0) + 1
 
+    def degree(fn) -> int:
+        return in_deg.get(fn.id, 0) + out_deg.get(fn.id, 0)
+
     selected: list = []
     seen: set[str] = set()
 
-    # Routes first — entry points take precedence regardless of degree.
-    for fn in graph.functions.values():
-        if fn.route and fn.id not in seen:
-            selected.append(fn)
-            seen.add(fn.id)
-            if len(selected) >= max_total:
-                return selected
+    # Routes — capped so they don't crowd out central functions.
+    route_quota = max(1, max_total // 4)
+    routes = sorted(
+        (fn for fn in graph.functions.values() if fn.route),
+        key=degree,
+        reverse=True,
+    )[:route_quota]
+    for fn in routes:
+        selected.append(fn)
+        seen.add(fn.id)
 
-    # Then central functions, skipping privates and isolated ones.
+    # Central functions: skip privates, dunders, and isolated nodes.
     candidates = [
         fn for fn in graph.functions.values()
         if fn.id not in seen and not fn.name.startswith("_")
-        and (in_deg.get(fn.id, 0) + out_deg.get(fn.id, 0)) > 0
+        and degree(fn) > 0
     ]
-    candidates.sort(
-        key=lambda f: in_deg.get(f.id, 0) + out_deg.get(f.id, 0),
-        reverse=True,
-    )
+    candidates.sort(key=degree, reverse=True)
     for fn in candidates:
         if len(selected) >= max_total:
             break
@@ -321,9 +327,15 @@ def _build_project_summary(graph: Graph, root: Path) -> str:
     return "\n".join(parts)
 
 
-SCHEMA_TEXT = """\
-{
-  "data_flow": "One paragraph tracing data through the system. MUST reference at least 6 functions from the 'Data flow targets' section above, formatted as `name()` or `Class.method()`. Layer-only descriptions (API → services → repos) without concrete function names are unacceptable.",
+_DATA_FLOW_INSTRUCTION = (
+    "One paragraph tracing data through the system. MUST reference at least 6"
+    " functions from the 'Data flow targets' section above, formatted as"
+    " `name()` or `Class.method()`. Layer-only descriptions"
+    " (API \u2192 services \u2192 repos) without concrete function names are"
+    " unacceptable."
+)
+
+_SCHEMA_TAIL = """\
   "domain_context": "2-3 sentences: what domain concepts mean for the code.",
   "zone_intents": {
     "<zone_or_file>": {"why": "...", "wrong_approach": "..."}
@@ -356,6 +368,10 @@ SCHEMA_TEXT = """\
   },
   "new_feature_checklist": ["1. ...", "2. ..."]
 }"""
+
+SCHEMA_TEXT = (
+    '{\n  "data_flow": "' + _DATA_FLOW_INSTRUCTION + '",\n' + _SCHEMA_TAIL
+)
 
 
 # ---------------------------------------------------------------------------
