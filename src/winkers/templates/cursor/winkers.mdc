@@ -13,41 +13,28 @@ alwaysApply: false
 
 # Winkers — Architectural Context
 
-Before modifying code, use the Winkers MCP tools to understand the
-dependency graph and avoid breaking callers.
+Before non-trivial edits, use Winkers MCP tools to understand the dependency
+graph and avoid breaking callers.
 
 ## Workflow
 
-1. **Understand structure**
-   `orient` with `include: ["map", "conventions"]` — zones, hotspots, data flow, zone intents. Call first.
+1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
+2. `before_create` with `intent: "<goal>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions, or safe alternatives. **Call before writing any code.**
+3. Write / edit code.
+4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
-2. **Inspect the area**
-   `scope` with `file: "<path>"` — locked/free functions, callers, related rules for that file.
+## On demand
 
-3. **Get rules**
-   `orient` with `include: ["rules_list"]` — available coding rule categories.
-   `rule_read` with `category: "<name>"` — detailed rules with wrong_approach.
+| Tool | When |
+|------|------|
+| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `convention_read` with `target` | zone intent / data_flow / checklist |
+| `session_done` | optional cross-file audit |
 
-4. **Before creating new code**
-   `before_create` with `intent: "<what you want>"` — search existing functions.
+## Key concepts
 
-5. **After writing code**
-   `after_create` with `file_path: "<path>"` — updates graph, checks impact.
-   `scope` with `function: "<name>"` — verify callers are not broken.
-
-6. **When done**
-   `session_done` (no args) — PASS/FAIL audit. Do not finish until PASS.
-
-## Other tools
-
-- `orient` with `include: ["functions_graph"]` — full indexed function list with caller counts.
-- `orient` with `include: ["hotspots"]` — functions with many callers; high-impact to change.
-- `orient` with `include: ["routes"]` — HTTP endpoints: method, path, handler, callees.
-- `orient` with `include: ["ui_map"]` — route-to-template links with UI elements.
-- `convention_read` with `target: "<zone>"` — zone intent details, data_flow, checklist.
-
-## Key rules
-
-- **locked** function = has callers depending on signature.
-  Never change param types, order, or return type without updating all callers.
-- **free** function = no callers. Modify freely.
+- **locked** function = has callers depending on signature. Never change
+  param types, order, or return type without updating all callers.
+- **free** function = no callers; modify freely.

@@ -6,9 +6,12 @@ import pytest
 
 from winkers.graph import GraphBuilder
 from winkers.mcp.tools import (
+    _one_liner,
     _section_functions_graph,
     _section_hotspots,
     _section_map,
+    _section_rules_list,
+    _tool_before_create,
     _tool_orient,
     _tool_scope,
 )
@@ -143,9 +146,79 @@ def test_scope_file_fields(graph):
         assert "callers" in fn
 
 
+def test_scope_file_coupling_fields(graph):
+    """scope(file=) exposes sibling_imports / imported_by / migration_cost (0.8.1)."""
+    result = _tool_scope(graph, {"file": "modules/pricing.py"})
+    assert "sibling_imports" in result
+    assert "imported_by" in result
+    assert "migration_cost" in result
+    # pricing.py is imported by api/prices.py and modules/inventory.py.
+    assert "api/prices.py" in result["imported_by"]
+    assert "modules/inventory.py" in result["imported_by"]
+    assert result["migration_cost"] == len(result["imported_by"])
+    # pricing.py itself imports nothing from its own zone.
+    assert result["sibling_imports"] == 0
+
+
+def test_scope_file_sibling_imports_nonzero(graph):
+    """inventory.py imports pricing.py from the same zone → sibling_imports ≥ 1."""
+    result = _tool_scope(graph, {"file": "modules/inventory.py"})
+    assert result["sibling_imports"] >= 1
+
+
 def test_scope_no_args(graph):
     result = _tool_scope(graph, {})
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# before_create — intent categorization (0.8.1)
+# ---------------------------------------------------------------------------
+
+def test_before_create_create_category(graph, tmp_path):
+    """Creation keywords route to the FTS5 fallback and return intent_type=create."""
+    result = _tool_before_create(graph, {"intent": "add batch discount feature"}, tmp_path)
+    assert result.get("intent_type") == "create"
+    assert "existing" in result
+    assert "matches" in result
+
+
+def test_before_create_restructure_category(graph, tmp_path):
+    """Restructure keywords return coupling + safe_alternative."""
+    result = _tool_before_create(
+        graph, {"intent": "consolidate modules/ files into rules.py"}, tmp_path,
+    )
+    assert result.get("intent_type") == "restructure"
+    assert "resolved_targets" in result
+    assert "migration_cost" in result
+    assert "cross_imports" in result
+    assert "safe_alternative" in result
+    # resolved targets must include the zone's files.
+    assert any("pricing.py" in t for t in result["resolved_targets"])
+
+
+def test_before_create_modify_category(graph, tmp_path):
+    """Modify keywords return affected_fns with callers + expressions."""
+    result = _tool_before_create(
+        graph, {"intent": "rename calculate_price to compute_price"}, tmp_path,
+    )
+    assert result.get("intent_type") == "modify"
+    assert "affected_fns" in result
+    names = [fn["name"] for fn in result["affected_fns"]]
+    assert "calculate_price" in names
+    # calculate_price has callers — expression strings must be populated.
+    target = next(fn for fn in result["affected_fns"] if fn["name"] == "calculate_price")
+    assert target["locked"] is True
+    assert target["callers_count"] >= 1
+    assert all("expression" in c for c in target["callers"])
+
+
+def test_before_create_unknown_category(graph, tmp_path):
+    """When no keywords and no targets, returns orient-lite architectural context."""
+    result = _tool_before_create(graph, {"intent": "clean up the code"}, tmp_path)
+    assert result.get("intent_type") in ("unknown", "create")
+    # Either way, the tool must not return an empty answer.
+    assert any(k in result for k in ("hotspots", "existing"))
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +267,72 @@ def test_hotspots_low_threshold(graph):
         assert "callers" in h
         assert len(h["callers"]) >= 1
         assert "expression" in h["callers"][0]
+
+
+# ---------------------------------------------------------------------------
+# rules_list section (0.8.1)
+# ---------------------------------------------------------------------------
+
+def _write_rules(tmp_path, rules):
+    from winkers.conventions import RulesFile, RulesStore
+
+    RulesStore(tmp_path).save(RulesFile(rules=rules))
+
+
+def test_rules_list_includes_wrong_approach_snippet(tmp_path):
+    from winkers.conventions import ConventionRule
+
+    rule = ConventionRule(
+        id=4,
+        category="numeric",
+        title="Decimal precision consistency",
+        content="Use Decimal for money. Never cast to float mid-calculation.",
+        wrong_approach=(
+            "Converting Decimal to float in mid-pipeline: you lose precision, and "
+            "downstream formatters silently round — totals drift by cents at scale."
+        ),
+        source="auto-detected",
+        created="2026-04-15",
+    )
+    _write_rules(tmp_path, [rule])
+
+    result = _section_rules_list(tmp_path)
+
+    assert result["total"] == 1
+    numeric = result["categories"]["numeric"]
+    assert len(numeric) == 1
+    entry = numeric[0]
+    assert entry["id"] == 4
+    assert entry["title"] == "Decimal precision consistency"
+    assert "wrong_approach" in entry
+    assert entry["wrong_approach"].startswith("Converting Decimal to float")
+    # single-line
+    assert "\n" not in entry["wrong_approach"]
+
+
+def test_rules_list_omits_wrong_approach_when_empty(tmp_path):
+    from winkers.conventions import ConventionRule
+
+    rule = ConventionRule(
+        id=7,
+        category="api",
+        title="No global state in handlers",
+        content="Handlers must not mutate module-level state.",
+        source="manual",
+        created="2026-04-15",
+    )
+    _write_rules(tmp_path, [rule])
+
+    entry = _section_rules_list(tmp_path)["categories"]["api"][0]
+    assert "wrong_approach" not in entry
+
+
+def test_one_liner_truncates_long_multiline():
+    text = "First line is already long enough on its own.\n" + ("x" * 200)
+    out = _one_liner(text, limit=80)
+    assert "\n" not in out
+    assert len(out) <= 80
+    assert out.endswith("…")
 
 
 # ---------------------------------------------------------------------------

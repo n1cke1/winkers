@@ -308,7 +308,7 @@ class TestSessionAuditHook:
 
 class TestHookInstaller:
     def test_install_interactive_hooks(self, tmp_path):
-        """_install_interactive_hooks adds all 4 hook events."""
+        """_install_interactive_hooks adds 3 hook events (Stop removed in 0.8.1)."""
         from winkers.cli.main import _install_interactive_hooks
 
         hooks: dict = {}
@@ -318,7 +318,8 @@ class TestHookInstaller:
         assert "UserPromptSubmit" in hooks
         assert "PreToolUse" in hooks
         assert "PostToolUse" in hooks
-        assert "Stop" in hooks
+        # Stop hook was deliberately removed in 0.8.1 (session_done muted).
+        assert "Stop" not in hooks
 
         # Check matcher on PreToolUse
         pre_tool = hooks["PreToolUse"][0]
@@ -334,7 +335,7 @@ class TestHookInstaller:
 
         assert changed is False
         assert len(hooks["UserPromptSubmit"]) == 1
-        assert len(hooks["Stop"]) == 1
+        assert len(hooks["PostToolUse"]) == 1
 
     def test_install_updates_stale_path(self, tmp_path):
         """Hooks with old path get updated to new winkers binary."""
@@ -343,7 +344,7 @@ class TestHookInstaller:
         hooks: dict = {}
         # Install with old Linux path
         _install_interactive_hooks(hooks, "/opt/old/.venv/bin/winkers", tmp_path)
-        old_cmd = hooks["Stop"][0]["hooks"][0]["command"]
+        old_cmd = hooks["PostToolUse"][0]["hooks"][0]["command"]
         assert "/opt/old/" in old_cmd
 
         # Re-install with current Windows path
@@ -351,11 +352,27 @@ class TestHookInstaller:
             hooks, "C:/Dev/.venv/Scripts/winkers", tmp_path,
         )
         assert changed is True
-        new_cmd = hooks["Stop"][0]["hooks"][0]["command"]
+        new_cmd = hooks["PostToolUse"][0]["hooks"][0]["command"]
         assert "C:/Dev/" in new_cmd
         assert "/opt/old/" not in new_cmd
         # No duplicates
-        assert len(hooks["Stop"]) == 1
+        assert len(hooks["PostToolUse"]) == 1
+
+    def test_install_removes_legacy_session_audit(self, tmp_path):
+        """0.8.1: any pre-existing Stop/session-audit hook is stripped on install."""
+        from winkers.cli.main import _install_interactive_hooks
+
+        hooks: dict = {
+            "Stop": [
+                {"hooks": [{
+                    "type": "command",
+                    "command": "/old/winkers hook session-audit /proj",
+                    "timeout": 10,
+                }]},
+            ],
+        }
+        _install_interactive_hooks(hooks, "winkers", tmp_path)
+        assert "Stop" not in hooks
 
     def test_upsert_session_hook(self):
         """_upsert_hook updates existing command path."""

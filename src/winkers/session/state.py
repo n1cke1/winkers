@@ -40,13 +40,13 @@ class SessionState(BaseModel):
     writes: list[WriteEvent] = []
     warnings: list[Warning] = []
     before_create_calls: int = 0
-    after_create_calls: int = 0
+    impact_check_calls: int = 0
     session_done_calls: int = 0
     graph_snapshot_at_start: dict[str, str] = {}  # {fn_id: signature_hash}
 
     def add_write(self, event: WriteEvent) -> None:
         self.writes.append(event)
-        self.after_create_calls += 1
+        self.impact_check_calls += 1
 
     def add_warning(self, warning: Warning) -> None:
         self.warnings.append(warning)
@@ -64,7 +64,7 @@ class SessionState(BaseModel):
             "warnings_pending": len(self.pending_warnings()),
             "files_modified": len(self.files_modified()),
             "before_create_calls": self.before_create_calls,
-            "after_create_calls": self.after_create_calls,
+            "impact_check_calls": self.impact_check_calls,
         }
 
 
