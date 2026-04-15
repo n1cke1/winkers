@@ -1009,6 +1009,9 @@ def _check_complexity_delta(graph: Graph, session) -> dict | None:
     return None
 
 
+_AFFECTED_FNS_LIMIT = 5  # cap for zone-expanded function lists
+
+
 def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     from winkers.search import format_before_create_response, search_functions
     from winkers.target_resolution import categorize_intent, resolve_targets
@@ -1017,36 +1020,38 @@ def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     zone = args.get("zone", "")
 
     if not intent:
-        return {"error": "Provide 'intent' — what you want to create."}
+        return {"error": "Provide 'intent' — what you want to create or change."}
 
     category = categorize_intent(intent)
     targets = resolve_targets(intent, graph)
 
-    if category == "restructure" and not targets.is_empty():
-        return _before_create_restructure(graph, intent, targets)
-
-    if category == "modify":
-        # Either explicit targets, or FTS5 fallback to pick affected fns.
+    if category == "change":
         if targets.functions or targets.paths:
-            return _before_create_modify(graph, intent, targets)
+            return _before_create_change(graph, intent, targets, explicit_fns=targets.functions)
+        # No explicit targets — fall back to FTS5 to derive function targets.
         fallback_matches = search_functions(graph, intent, zone=zone)
         if fallback_matches:
-            derived = _targets_from_matches(fallback_matches)
-            return _before_create_modify(graph, intent, derived)
-        # Nothing matched — fall through to unknown.
+            from winkers.target_resolution import ResolvedTargets
+
+            derived = ResolvedTargets()
+            for m in fallback_matches:
+                if m.fn.id not in derived.functions:
+                    derived.functions.append(m.fn.id)
+            return _before_create_change(
+                graph, intent, derived, explicit_fns=derived.functions,
+            )
         return _before_create_unknown(graph, intent, root)
 
-    if category in ("create", "unknown"):
-        if category == "unknown" and targets.is_empty():
-            # No keywords, no named targets — give architectural context.
-            fallback_matches = search_functions(graph, intent, zone=zone)
-            if not fallback_matches:
-                return _before_create_unknown(graph, intent, root)
-            response = format_before_create_response(
-                graph, intent, fallback_matches, zone=zone, root=root,
-            )
-            response["intent_type"] = "create"
-            return response
+    if category == "unknown" and targets.is_empty():
+        # No keywords, no named targets — give architectural context.
+        fallback_matches = search_functions(graph, intent, zone=zone)
+        if not fallback_matches:
+            return _before_create_unknown(graph, intent, root)
+        response = format_before_create_response(
+            graph, intent, fallback_matches, zone=zone, root=root,
+        )
+        response["intent_type"] = "create"
+        return response
 
     # Default: create / fallback.
     matches = search_functions(graph, intent, zone=zone)
@@ -1055,15 +1060,49 @@ def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     return response
 
 
-def _before_create_restructure(graph: Graph, intent: str, targets) -> dict:
-    resolved = sorted(set(targets.paths))
-    resolved_set = set(resolved)
+def _before_create_change(
+    graph: Graph,
+    intent: str,
+    targets,
+    explicit_fns: list[str],
+) -> dict:
+    """Adaptive response for `change` intents.
 
+    `explicit_fns` are function ids the user named directly in the intent
+    (or FTS5-derived from the intent). They are always shown in full.
+    Functions discovered by zone/file expansion are added on top, but only
+    if locked, and capped at _AFFECTED_FNS_LIMIT.
+    """
+    file_paths = sorted(set(targets.paths))
+    explicit_set = set(explicit_fns)
+
+    response: dict = {
+        "intent_type": "change",
+        "intent": intent,
+        "resolved_targets": {
+            "files": file_paths,
+            "functions": [f for f in explicit_fns if f in graph.functions],
+        },
+    }
+
+    if file_paths:
+        response["files"] = _files_block(graph, file_paths)
+
+    fn_block = _functions_block(graph, file_paths, explicit_set)
+    if fn_block is not None:
+        response["functions"] = fn_block
+
+    return response
+
+
+def _files_block(graph: Graph, file_paths: list[str]) -> dict:
+    resolved_set = set(file_paths)
     cross_imports = 0
     external_importers: set[str] = set()
     migration_cost = 0
+    locked_fns = 0
 
-    for path in resolved:
+    for path in file_paths:
         for edge in graph.imports_from_file(path):
             if edge.target_file in resolved_set and edge.target_file != path:
                 cross_imports += 1
@@ -1072,9 +1111,6 @@ def _before_create_restructure(graph: Graph, intent: str, targets) -> dict:
                 continue
             external_importers.add(edge.source_file)
             migration_cost += 1
-
-    locked_fns = 0
-    for path in resolved:
         fnode = graph.files.get(path)
         if not fnode:
             continue
@@ -1099,9 +1135,6 @@ def _before_create_restructure(graph: Graph, intent: str, targets) -> dict:
         )
 
     return {
-        "intent_type": "restructure",
-        "intent": intent,
-        "resolved_targets": resolved,
         "cross_imports": cross_imports,
         "imported_by": sorted(external_importers),
         "migration_cost": migration_cost,
@@ -1110,18 +1143,43 @@ def _before_create_restructure(graph: Graph, intent: str, targets) -> dict:
     }
 
 
-def _before_create_modify(graph: Graph, intent: str, targets) -> dict:
-    fn_ids: list[str] = list(targets.functions)
-    for path in targets.paths:
+def _functions_block(
+    graph: Graph,
+    file_paths: list[str],
+    explicit_fns: set[str],
+) -> dict | None:
+    """Build affected_fns list. Explicit fns shown in full; zone-expanded
+    fns shown locked-only and capped, with totals so the agent sees scale."""
+
+    # Functions discovered by zone/file expansion (not user-named).
+    expanded_locked: list[str] = []
+    expanded_total_locked = 0
+    expanded_total_callers = 0
+    for path in file_paths:
         fnode = graph.files.get(path)
         if not fnode:
             continue
         for fid in fnode.function_ids:
-            if fid not in fn_ids:
-                fn_ids.append(fid)
+            if fid in explicit_fns:
+                continue
+            if not graph.is_locked(fid):
+                continue
+            expanded_total_locked += 1
+            expanded_total_callers += len(graph.callers(fid))
+            expanded_locked.append(fid)
+
+    # Sort expansion by callers desc so the cap keeps the most-impactful ones.
+    expanded_locked.sort(key=lambda fid: len(graph.callers(fid)), reverse=True)
+    shown_expanded = expanded_locked[:_AFFECTED_FNS_LIMIT]
+
+    chosen_ids = list(explicit_fns) + [
+        fid for fid in shown_expanded if fid not in explicit_fns
+    ]
+    if not chosen_ids:
+        return None
 
     affected: list[dict] = []
-    for fid in fn_ids:
+    for fid in chosen_ids:
         fn = graph.functions.get(fid)
         if fn is None:
             continue
@@ -1130,30 +1188,34 @@ def _before_create_modify(graph: Graph, intent: str, targets) -> dict:
             1 for e in caller_edges
             if "test" in e.call_site.file.lower()
         )
-        sample = [
-            {
-                "file": e.call_site.file,
-                "line": e.call_site.line,
-                "fn": e.source_fn,
-                "expression": e.call_site.expression,
-            }
-            for e in caller_edges[:8]
-        ]
         affected.append({
             "name": fn.name,
             "file": fn.file,
             "locked": bool(caller_edges),
             "callers_count": len(caller_edges),
             "test_callers_count": test_count,
-            "callers": sample,
+            "callers": [
+                {
+                    "file": e.call_site.file,
+                    "line": e.call_site.line,
+                    "fn": e.source_fn,
+                    "expression": e.call_site.expression,
+                }
+                for e in caller_edges[:8]
+            ],
         })
 
-    return {
-        "intent_type": "modify",
-        "intent": intent,
-        "resolved_targets": [graph.functions[f].id for f in fn_ids if f in graph.functions],
-        "affected_fns": affected,
-    }
+    block: dict = {"affected_fns": affected}
+
+    # Truncation counters: only when zone-expansion actually skipped something.
+    if expanded_total_locked > len(shown_expanded):
+        block["total_locked"] = expanded_total_locked + len(explicit_fns)
+        block["total_callers"] = expanded_total_callers + sum(
+            len(graph.callers(fid)) for fid in explicit_fns if fid in graph.functions
+        )
+        block["shown"] = len(affected)
+
+    return block
 
 
 def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
@@ -1182,17 +1244,6 @@ def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
         "hotspots": top_hotspots,
         "zone_intents": zone_intents,
     }
-
-
-def _targets_from_matches(matches):
-    """Convert search Match list into ResolvedTargets (for modify fallback)."""
-    from winkers.target_resolution import ResolvedTargets
-
-    targets = ResolvedTargets()
-    for m in matches:
-        if m.fn.id not in targets.functions:
-            targets.functions.append(m.fn.id)
-    return targets
 
 
 # ---------------------------------------------------------------------------

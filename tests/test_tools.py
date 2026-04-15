@@ -176,48 +176,65 @@ def test_scope_no_args(graph):
 # ---------------------------------------------------------------------------
 
 def test_before_create_create_category(graph, tmp_path):
-    """Creation keywords route to the FTS5 fallback and return intent_type=create."""
+    """Creation keywords route to FTS5 fallback and return intent_type=create."""
     result = _tool_before_create(graph, {"intent": "add batch discount feature"}, tmp_path)
     assert result.get("intent_type") == "create"
     assert "existing" in result
     assert "matches" in result
 
 
-def test_before_create_restructure_category(graph, tmp_path):
-    """Restructure keywords return coupling + safe_alternative."""
+def test_before_create_change_files_only(graph, tmp_path):
+    """Structural intent with only file/zone targets → files block, no functions block."""
     result = _tool_before_create(
         graph, {"intent": "consolidate modules/ files into rules.py"}, tmp_path,
     )
-    assert result.get("intent_type") == "restructure"
-    assert "resolved_targets" in result
-    assert "migration_cost" in result
-    assert "cross_imports" in result
-    assert "safe_alternative" in result
-    # resolved targets must include the zone's files.
-    assert any("pricing.py" in t for t in result["resolved_targets"])
+    assert result.get("intent_type") == "change"
+    assert result["resolved_targets"]["files"]
+    assert result["resolved_targets"]["functions"] == []
+    assert "files" in result
+    assert "migration_cost" in result["files"]
+    assert "safe_alternative" in result["files"]
+    # No fn block expected when no fns are explicitly named (zone expansion of
+    # locked fns produces a functions block too — both are valid). Allow either.
+    if "functions" in result:
+        assert "affected_fns" in result["functions"]
 
 
-def test_before_create_modify_category(graph, tmp_path):
-    """Modify keywords return affected_fns with callers + expressions."""
+def test_before_create_change_function_only(graph, tmp_path):
+    """In-place intent naming a function → functions block with caller expressions."""
     result = _tool_before_create(
         graph, {"intent": "rename calculate_price to compute_price"}, tmp_path,
     )
-    assert result.get("intent_type") == "modify"
-    assert "affected_fns" in result
-    names = [fn["name"] for fn in result["affected_fns"]]
+    assert result.get("intent_type") == "change"
+    assert "modules/pricing.py::calculate_price" in result["resolved_targets"]["functions"]
+    assert "functions" in result
+    names = [fn["name"] for fn in result["functions"]["affected_fns"]]
     assert "calculate_price" in names
-    # calculate_price has callers — expression strings must be populated.
-    target = next(fn for fn in result["affected_fns"] if fn["name"] == "calculate_price")
+    target = next(
+        fn for fn in result["functions"]["affected_fns"]
+        if fn["name"] == "calculate_price"
+    )
     assert target["locked"] is True
     assert target["callers_count"] >= 1
     assert all("expression" in c for c in target["callers"])
+
+
+def test_before_create_change_mixed_targets(graph, tmp_path):
+    """Intent naming both file and function → both blocks present."""
+    result = _tool_before_create(
+        graph, {"intent": "refactor calculate_price in pricing.py"}, tmp_path,
+    )
+    assert result.get("intent_type") == "change"
+    assert result["resolved_targets"]["files"]
+    assert result["resolved_targets"]["functions"]
+    assert "files" in result
+    assert "functions" in result
 
 
 def test_before_create_unknown_category(graph, tmp_path):
     """When no keywords and no targets, returns orient-lite architectural context."""
     result = _tool_before_create(graph, {"intent": "clean up the code"}, tmp_path)
     assert result.get("intent_type") in ("unknown", "create")
-    # Either way, the tool must not return an empty answer.
     assert any(k in result for k in ("hotspots", "existing"))
 
 

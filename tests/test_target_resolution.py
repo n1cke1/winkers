@@ -31,23 +31,25 @@ def test_categorize_create_keywords():
     assert categorize_intent("build a new endpoint") == "create"
 
 
-def test_categorize_restructure_keywords():
-    assert categorize_intent("consolidate domain/ files") == "restructure"
-    assert categorize_intent("move helpers into utils.py") == "restructure"
-    assert categorize_intent("split pricing into two modules") == "restructure"
-    assert categorize_intent("merge tax and discount into rules") == "restructure"
+def test_categorize_change_structural_keywords():
+    """Structural verbs (move/merge/consolidate/split) → change."""
+    assert categorize_intent("consolidate domain/ files") == "change"
+    assert categorize_intent("move helpers into utils.py") == "change"
+    assert categorize_intent("split pricing into two modules") == "change"
+    assert categorize_intent("merge tax and discount into rules") == "change"
 
 
-def test_categorize_modify_keywords():
-    assert categorize_intent("simplify calculate_price") == "modify"
-    assert categorize_intent("rename get_price to fetch_price") == "modify"
-    assert categorize_intent("refactor the inventory module") == "modify"
-    assert categorize_intent("remove deprecated helper") == "modify"
+def test_categorize_change_inplace_keywords():
+    """In-place edit verbs (refactor/simplify/rename/remove) → change."""
+    assert categorize_intent("simplify calculate_price") == "change"
+    assert categorize_intent("rename get_price to fetch_price") == "change"
+    assert categorize_intent("refactor the inventory module") == "change"
+    assert categorize_intent("remove deprecated helper") == "change"
 
 
-def test_categorize_restructure_outranks_create():
-    """'add a new module by consolidating X' should read as restructure."""
-    assert categorize_intent("add a new module by consolidating X") == "restructure"
+def test_categorize_change_outranks_create():
+    """'add a new module by consolidating X' should read as change."""
+    assert categorize_intent("add a new module by consolidating X") == "change"
 
 
 def test_categorize_empty_or_unknown():

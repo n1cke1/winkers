@@ -5,9 +5,8 @@
 ### Control points refinement (graph-mcp-bench findings)
 
 - **`scope(file=)` module coupling** — response now includes `sibling_imports`, `imported_by`, and `migration_cost`. Lets an agent see the actual cost of moving or merging files instead of just "all locked".
-- **`before_create` intent categorization** — keyword-based dispatch (create / restructure / modify / unknown) + regex target resolution from the graph's name dictionary. No API calls.
-  - `restructure` intents (move / merge / consolidate / split) return `resolved_targets`, `cross_imports`, `imported_by`, `migration_cost`, `locked_fns`, and a `safe_alternative` recommendation.
-  - `modify` intents (change / refactor / simplify / rename) return `affected_fns` with callers + call-site expressions.
+- **`before_create` intent categorization** — keyword-based dispatch (create / change / unknown) + regex target resolution from the graph's name dictionary. No API calls.
+  - `change` intents (move / merge / consolidate / split / refactor / simplify / rename / etc.) return an adaptive payload: `files` block (coupling: `cross_imports`, `imported_by`, `migration_cost`, `locked_fns`, `safe_alternative`) when file/zone targets are present, and/or `functions` block (`affected_fns` with callers + call-site expressions, plus truncation counters when zone-expansion caps the list) when function targets are present.
   - unresolved intents return an orient-lite payload (top hotspots + zone intents) instead of "No existing implementations found".
 - **`after_create` renamed to `impact_check`** — the old name described *when* to call, not *what* it does. The tool is invoked after writes, edits, *or* deletes. Claude Code users keep the automatic post-write hook; other agents call the MCP tool explicitly.
 - **`session_done` muted** — no longer gated by a Stop hook and no longer blocks task completion. Remains available as an optional final audit. Per-file `impact_check` (via hook or tool) now carries the main coherence signal.
