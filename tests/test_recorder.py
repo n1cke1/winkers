@@ -11,7 +11,7 @@ from winkers.models import (
     SessionRecord,
 )
 from winkers.recorder import parse_transcript, parse_transcript_text
-from winkers.scoring import compute_debt_delta, estimate_score
+from winkers.scoring import compute_debt_delta, estimate_score, score_breakdown
 from winkers.session_store import SessionStore
 
 # ---------------------------------------------------------------------------
@@ -321,6 +321,55 @@ class TestApprovalScoring:
         debt = DebtDelta(complexity_delta=-10, files_created=3)
         score = estimate_score(session, commit, debt)
         assert 0.0 <= score <= 1.0
+
+    def test_max_turns_penalised(self):
+        """session_end='max_turns' (turn-limit) is now penalised like user_killed."""
+        clean = SessionRecord(session_id="s", started_at="", completed_at="",
+                              session_end="agent_done")
+        capped = SessionRecord(session_id="s", started_at="", completed_at="",
+                               session_end="max_turns")
+        assert estimate_score(capped, CommitBinding(), DebtDelta()) < estimate_score(
+            clean, CommitBinding(), DebtDelta()
+        )
+
+    def test_user_killed_stronger_penalty(self):
+        clean = SessionRecord(session_id="s", started_at="", completed_at="",
+                              session_end="agent_done")
+        killed = SessionRecord(session_id="s", started_at="", completed_at="",
+                               session_end="user_killed")
+        assert (
+            estimate_score(clean, CommitBinding(), DebtDelta())
+            - estimate_score(killed, CommitBinding(), DebtDelta())
+        ) >= 0.19  # 0.20 minus float tolerance
+
+
+class TestScoreBreakdown:
+    def test_breakdown_flags_no_data(self):
+        """Empty session signals are reported as 'no_data', not silently ignored."""
+        session = SessionRecord(session_id="s", started_at="", completed_at="")
+        result = score_breakdown(session, CommitBinding(), DebtDelta())
+        assert "score" in result
+        sig = result["signals"]
+        assert sig["tests"] == "no_data"
+        assert sig["impact_check"] == "no_data"
+        assert sig["debt"] == "no_data"
+        assert sig["commit"] == "no_commit"
+
+    def test_breakdown_records_real_data(self):
+        session = SessionRecord(
+            session_id="s", started_at="", completed_at="",
+            tests_passed=True,
+            winkers_calls={"impact_check": 3},
+        )
+        commit = CommitBinding(status="committed")
+        debt = DebtDelta(complexity_delta=2, import_edges_delta=1)
+        result = score_breakdown(session, commit, debt)
+        sig = result["signals"]
+        assert sig["tests"] == "passed"
+        assert sig["impact_check"] == 3
+        assert sig["commit"] == "committed"
+        assert isinstance(sig["debt"], dict)
+        assert sig["debt"]["complexity_delta"] == 2
 
 
 # ---------------------------------------------------------------------------
