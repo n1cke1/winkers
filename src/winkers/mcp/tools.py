@@ -447,13 +447,27 @@ def _one_liner(text: str, limit: int = 140) -> str:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
+def _file_fn_entry(graph: Graph, fid: str) -> dict:
+    """One row inside scope(file=) functions[]. Includes intent if present."""
+    fn = graph.functions[fid]
+    entry: dict = {
+        "id": fid,
+        "name": fn.name,
+        "locked": graph.is_locked(fid),
+        "callers": len(graph.callers(fid)),
+    }
+    if fn.intent:
+        entry["intent"] = fn.intent
+    return entry
+
+
 def _section_hotspots(graph: Graph, min_callers: int) -> dict:
     hotspots = []
     for fn_id, fn in graph.functions.items():
         caller_edges = graph.callers(fn_id)
         if len(caller_edges) < min_callers:
             continue
-        hotspots.append({
+        entry: dict = {
             "function": fn_id,
             "file": fn.file,
             "signature": _signature(fn),
@@ -468,7 +482,10 @@ def _section_hotspots(graph: Graph, min_callers: int) -> dict:
                 }
                 for e in caller_edges
             ],
-        })
+        }
+        if fn.intent:
+            entry["intent"] = fn.intent
+        hotspots.append(entry)
     hotspots.sort(key=lambda h: h["callers_count"], reverse=True)
     return {"min_callers": min_callers, "count": len(hotspots), "hotspots": hotspots}
 
@@ -523,18 +540,21 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
         caller_edges = graph.callers(fn.id)
         callee_edges = graph.callees(fn.id)
 
+        function_entry: dict[str, Any] = {
+            "id": fn.id,
+            "file": fn.file,
+            "line_start": fn.line_start,
+            "line_end": fn.line_end,
+            "signature": _signature(fn),
+            "docstring": fn.docstring,
+            "complexity": fn.complexity,
+            "is_async": fn.is_async,
+            "locked": graph.is_locked(fn.id),
+        }
+        if fn.intent:
+            function_entry["intent"] = fn.intent
         result = {
-            "function": {
-                "id": fn.id,
-                "file": fn.file,
-                "line_start": fn.line_start,
-                "line_end": fn.line_end,
-                "signature": _signature(fn),
-                "docstring": fn.docstring,
-                "complexity": fn.complexity,
-                "is_async": fn.is_async,
-                "locked": graph.is_locked(fn.id),
-            },
+            "function": function_entry,
             "callers": [
                 {
                     "fn": e.source_fn,
@@ -571,12 +591,7 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "loc": file_node.lines_of_code,
             "imports": file_node.imports,
             "functions": [
-                {
-                    "id": fid,
-                    "name": graph.functions[fid].name,
-                    "locked": graph.is_locked(fid),
-                    "callers": len(graph.callers(fid)),
-                }
+                _file_fn_entry(graph, fid)
                 for fid in file_node.function_ids
                 if fid in graph.functions
             ],
@@ -1188,7 +1203,7 @@ def _functions_block(
             1 for e in caller_edges
             if "test" in e.call_site.file.lower()
         )
-        affected.append({
+        affected_entry: dict = {
             "name": fn.name,
             "file": fn.file,
             "locked": bool(caller_edges),
@@ -1203,7 +1218,10 @@ def _functions_block(
                 }
                 for e in caller_edges[:8]
             ],
-        })
+        }
+        if fn.intent:
+            affected_entry["intent"] = fn.intent
+        affected.append(affected_entry)
 
     block: dict = {"affected_fns": affected}
 

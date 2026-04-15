@@ -231,6 +231,48 @@ def test_before_create_change_mixed_targets(graph, tmp_path):
     assert "functions" in result
 
 
+def test_before_create_change_surfaces_intent(graph, tmp_path):
+    """affected_fns include fn.intent when LLM-generated description exists."""
+    # Inject an intent on calculate_price for this test
+    fn = graph.functions["modules/pricing.py::calculate_price"]
+    saved = fn.intent
+    fn.intent = "computes final price for an item with applicable discounts"
+    try:
+        result = _tool_before_create(
+            graph, {"intent": "rename calculate_price to compute_price"}, tmp_path,
+        )
+        affected = result["functions"]["affected_fns"]
+        target = next(e for e in affected if e["name"] == "calculate_price")
+        assert target.get("intent") == fn.intent
+    finally:
+        fn.intent = saved
+
+
+def test_scope_file_surfaces_intent(graph):
+    """scope(file=) functions[] include intent when present."""
+    fn = graph.functions["modules/pricing.py::calculate_price"]
+    saved = fn.intent
+    fn.intent = "computes final price for an item with applicable discounts"
+    try:
+        result = _tool_scope(graph, {"file": "modules/pricing.py"})
+        target = next(f for f in result["functions"] if f["name"] == "calculate_price")
+        assert target.get("intent") == fn.intent
+    finally:
+        fn.intent = saved
+
+
+def test_scope_function_surfaces_intent(graph):
+    """scope(function=) function entry includes intent when present."""
+    fn = graph.functions["modules/pricing.py::calculate_price"]
+    saved = fn.intent
+    fn.intent = "computes final price for an item with applicable discounts"
+    try:
+        result = _tool_scope(graph, {"function": "modules/pricing.py::calculate_price"})
+        assert result["function"].get("intent") == fn.intent
+    finally:
+        fn.intent = saved
+
+
 def test_before_create_unknown_category(graph, tmp_path):
     """When no keywords and no targets, returns orient-lite architectural context."""
     result = _tool_before_create(graph, {"intent": "clean up the code"}, tmp_path)
