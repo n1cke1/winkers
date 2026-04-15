@@ -94,7 +94,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<what you want to do>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions + `risk_level` / `dangerous_operations`, `similar_logic` warnings for duplicated `secondary_intents`, or safe alternatives. **Call before writing any code.**
+2. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Call before writing any code.**
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
@@ -102,9 +102,9 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 | Tool | When |
 |------|------|
-| `scope` with `file` or `function` | drill into coupling, caller expressions, pre-computed `impact` (risk / safe+dangerous ops / classified callers / action plan), `similar_logic` (shared `secondary_intents`) |
-| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory; `hotspots` entries carry `risk_level` when impact.json exists |
+| `scope` with `file` or `function` | coupling, caller expressions, `impact` (risk, safe+dangerous ops), `similar_logic` |
+| `rule_read` with `category` | full rule text when the one-liner isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 
@@ -112,5 +112,5 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 - **locked** — has callers; don't change signature without updating them.
 - **free** — no callers; modify freely.
-- **impact / risk_level** — LLM-assessed `low`/`medium`/`high`/`critical` per function, with `safe_operations` / `dangerous_operations` / classified callers / `action_plan`. Pre-computed at init time; appears in `scope(function=).impact` and `hotspots`.
-- **secondary_intents** — inline sub-task tags (e.g. `"email validation"`). `scope.similar_logic` and `before_create.similar_logic` group functions sharing tags — consider extracting instead of duplicating.
+- **risk_level** — `low`/`medium`/`high`/`critical` per function from `scope.impact` / `hotspots`; heed `dangerous_operations` before editing.
+- **secondary_intents** — inline sub-task tags; `similar_logic` flags duplicated logic — extract rather than duplicate.

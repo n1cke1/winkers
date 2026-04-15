@@ -19,7 +19,7 @@ graph and avoid breaking callers.
 ## Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<goal>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions + `risk_level` / `dangerous_operations`, `similar_logic` for duplicated `secondary_intents`, or safe alternatives. **Call before writing any code.**
+2. `before_create` with `intent: "<goal>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Call before writing any code.**
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
@@ -27,9 +27,9 @@ graph and avoid breaking callers.
 
 | Tool | When |
 |------|------|
-| `scope` with `file` or `function` | drill into coupling, caller expressions, pre-computed `impact` (risk / safe+dangerous ops / classified callers / action plan), `similar_logic` (shared `secondary_intents`) |
-| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory; `hotspots` entries carry `risk_level` when impact.json exists |
+| `scope` with `file` or `function` | coupling, caller expressions, `impact` (risk, safe+dangerous ops), `similar_logic` |
+| `rule_read` with `category` | full rule text when the one-liner isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 
@@ -38,14 +38,9 @@ graph and avoid breaking callers.
 - **locked** function = has callers depending on signature. Never change
   param types, order, or return type without updating all callers.
 - **free** function = no callers; modify freely.
-- **value_locked** = a module-level literal collection (`{"draft", "sent", ...}`)
-  read by some function and tested by callers with literal arguments.
-  Removing a value silently breaks them — `scope`, `before_create`, and
-  `impact_check` surface the warning.
-- **impact / risk_level** = per-function LLM-assessed risk
-  (`low`/`medium`/`high`/`critical`) + `safe_operations` / `dangerous_operations`
-  / classified callers + `action_plan`. Pre-computed at `winkers init` when an
-  LLM provider is set; surfaced in `scope(function=).impact` and `hotspots`.
-- **secondary_intents** = inline sub-task tags (e.g. `"email validation"`).
-  `scope.similar_logic` and `before_create.similar_logic` group functions
-  sharing tags — consider extracting shared logic instead of duplicating.
+- **value_locked** = module-level literal set; removing a value breaks
+  callers passing it as a literal.
+- **risk_level** = `low`/`medium`/`high`/`critical` per function from
+  `scope.impact` / `hotspots`; heed `dangerous_operations` before editing.
+- **secondary_intents** = inline sub-task tags; `similar_logic` flags
+  duplicated logic — extract rather than duplicate.

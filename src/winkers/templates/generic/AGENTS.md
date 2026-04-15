@@ -9,11 +9,9 @@ The server starts automatically via `.mcp.json`. Seven tools available.
    hotspots, data flow, zone intents, and coding rules with `title` +
    `wrong_approach` one-liner per rule. **First call.**
 
-2. **`before_create`** with `intent: "<what you want>"` — classifies intent,
-   resolves targets from graph, returns matches, migration cost, affected
-   callers with expressions + `risk_level` / `dangerous_operations`,
-   `similar_logic` warnings for duplicated `secondary_intents`, or safe
-   alternatives. **Call before writing any code.**
+2. **`before_create`** with `intent: "<what you want>"` — matches, migration
+   cost, affected callers (expressions + risk), `similar_logic` warnings for
+   duplicated logic, or safe alternatives. **Call before writing any code.**
 
 3. Write / edit code.
 
@@ -25,9 +23,9 @@ The server starts automatically via `.mcp.json`. Seven tools available.
 
 | Tool | When |
 |------|------|
-| `scope` with `file` or `function` | drill into coupling, caller expressions, pre-computed `impact` (risk, safe+dangerous ops, classified callers, action plan), `similar_logic` (shared `secondary_intents`) |
-| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory; `hotspots` entries include `risk_level` when impact.json exists |
+| `scope` with `file` or `function` | coupling, caller expressions, `impact` (risk, safe+dangerous ops, classified callers), `similar_logic` |
+| `rule_read` with `category` | full rule text when the one-liner isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 
@@ -37,9 +35,9 @@ The server starts automatically via `.mcp.json`. Seven tools available.
 |------|---------|
 | **locked** | Function has callers; changing params/return breaks them |
 | **free** | No callers — modify freely |
-| **value_locked** | Module-level literal collection (`{"draft", "sent", ...}`); removing a value silently breaks callers passing it as a literal |
-| **impact / risk_level** | Per-function LLM-assessed risk (`low`/`medium`/`high`/`critical`) + `safe_operations` / `dangerous_operations` / classified callers + `action_plan`. Pre-computed at `winkers init` when an LLM provider is configured; surfaced in `scope(function=).impact` and in `hotspots`. |
-| **secondary_intents** | Inline sub-task tags (e.g. `"email validation"`). `scope.similar_logic` and `before_create.similar_logic` group functions sharing tags — consider extracting instead of duplicating. |
+| **value_locked** | Module-level literal set; removing a value breaks callers passing it as a literal |
+| **risk_level** | `low`/`medium`/`high`/`critical` per function from `scope.impact` / `hotspots`; heed `dangerous_operations` before editing |
+| **secondary_intents** | Inline sub-task tags; `similar_logic` flags duplicated logic — extract rather than duplicate |
 | **startup_chain** | File is in the startup import chain; changes can prevent app start |
 
 ## Example
