@@ -1,4 +1,4 @@
-<!-- winkers-snippet-version: 0.8.1 -->
+<!-- winkers-snippet-version: 0.8.2 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
@@ -6,17 +6,19 @@
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, rules (`title` + `wrong_approach` one-liner). **First call.**
-2. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), or safe alternatives. **Call before writing any code.**
-3. Write / edit code.
-4. `impact_check` with `file_path: "<path>"` — graph update + duplicate + broken-import check. Auto via hook in Claude Code.
+2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). Use to pick a target before deep-dive.
+3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), or safe alternatives. **Prefer explicit targets** — write `fn_name()` / `Class.method()` / path in the intent for precise resolution. **Call before writing any code.**
+4. Write / edit code.
+5. `impact_check` with `file_path: "<path>"` — graph update + duplicate + broken-import check. Auto via hook in Claude Code.
 
 ### On demand
 
 | Tool | When |
 |------|------|
+| `browse` with `zone` / `file` / `min_callers` / `limit` / `offset` | list functions + intents, paginated |
 | `scope` with `file` or `function` | coupling, caller expressions, `impact` (risk / safe+dangerous ops), `similar_logic` |
 | `rule_read` with `category` | full rule text when the one-liner isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper call-graph / endpoints / risk-ranked fns |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 

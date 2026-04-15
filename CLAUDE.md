@@ -69,13 +69,14 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 `conventions[]` and `constraints[]` are removed — replaced by rules.json.
 
-## MCP tools (7 total)
+## MCP tools (8 total)
 
 - `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "ui_map". Shows session status if active.
+- `browse(zone?, file?, min_callers?, limit?, offset?)` — mid-level function inventory between orient and scope. Returns `"file::fn (callers) — intent"` strings, paginated. Intent omitted when null. Use after orient to scan what functions exist and what they do before picking a target.
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes. Function-level response also returns pre-computed `impact` (risk_level/safe+dangerous ops/classified callers/action_plan) and `similar_logic` (functions sharing `secondary_intents`) when impact.json exists.
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
 - `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
-- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph; for `change` returns adaptive payload (`files` block with coupling/migration_cost, `functions` block with affected_fns + caller expressions + `risk_level` + `dangerous_operations`, and a `similar_logic` warning when the target shares `secondary_intents` with other functions)
+- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph. **Prefer explicit markers in intent**: `fn_name()`, `Class.method()`, paths (`app/repos/invoice.py`), or `file.py::fn` — parser resolves those first, fuzzy matching is fallback. For `change` returns adaptive payload (`files` block with coupling/migration_cost/locked_fns, `functions` block with affected_fns + caller expressions + `risk_level` + `dangerous_operations`, `similar_logic` warning when target shares `secondary_intents`). Test-path files filtered unless intent contains `tests/`/`test_`/`conftest`.
 - `impact_check(file_path)` — incremental graph update, impact analysis, coherence check, session state (renamed from `after_create` in 0.8.1)
 - `session_done()` — optional final session audit across all writes; anti-loop (FAIL max once)
 
@@ -86,7 +87,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
 
-<!-- winkers-snippet-version: 0.8.1 -->
+<!-- winkers-snippet-version: 0.8.2 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
@@ -94,17 +95,19 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Call before writing any code.**
-3. Write / edit code.
-4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
+2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). Use to pick a target before deep-dive.
+3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code.**
+4. Write / edit code.
+5. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
 ### On demand
 
 | Tool | When |
 |------|------|
+| `browse` with `zone` / `file` / `min_callers` / `limit` / `offset` | list functions + intents, paginated |
 | `scope` with `file` or `function` | coupling, caller expressions, `impact` (risk, safe+dangerous ops), `similar_logic` |
 | `rule_read` with `category` | full rule text when the one-liner isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper call-graph / endpoints / risk-ranked fns |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 

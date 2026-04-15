@@ -1767,10 +1767,15 @@ def doctor(path: str):
         else:
             warn("CLAUDE.md exists but no Winkers snippet")
 
-        if "<!-- winkers-semantic-start -->" in content:
-            ok("CLAUDE.md semantic summary present")
-        elif sem:
-            warn("CLAUDE.md missing semantic summary — run: winkers init")
+        if "<!-- winkers-start -->" in content:
+            ok("CLAUDE.md Winkers pointer present")
+        elif "<!-- winkers-semantic-start -->" in content:
+            warn(
+                "CLAUDE.md has legacy semantic block"
+                " — run: winkers init (auto-migrates to pointer)"
+            )
+        else:
+            warn("CLAUDE.md missing Winkers pointer — run: winkers init")
     else:
         warn("No CLAUDE.md")
 
