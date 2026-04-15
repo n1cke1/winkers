@@ -119,11 +119,16 @@ def register_tools(
             Tool(
                 name="before_create",
                 description=(
-                    "CALL THIS BEFORE writing any new function, class, or module."
-                    " Searches the project graph for existing implementations matching"
-                    " your intent. Returns reusable code with import paths and pipeline"
-                    " context (upstream callers + downstream callees), or conventions"
-                    " for writing new code in the target zone."
+                    "CALL THIS BEFORE writing, editing, or deleting code."
+                    " For creates: searches the graph for existing implementations"
+                    " matching your intent (reuse over duplicate)."
+                    " For changes: returns affected files/functions, caller impact,"
+                    " migration cost, risk level, and similar_logic warnings."
+                    " PREFER explicit targets in your intent: `fn_name()` for"
+                    " functions, `Class.method()` for methods, relative file"
+                    " paths (`app/repos/invoice.py`), or `file.py::fn` notation."
+                    " Explicit targets give a precise response; plain language"
+                    " falls back to fuzzy matching with a tests/ filter."
                 ),
                 inputSchema={
                     "type": "object",
@@ -131,9 +136,14 @@ def register_tools(
                         "intent": {
                             "type": "string",
                             "description": (
-                                "What you want to create, in natural language."
-                                " Examples: 'validate email', 'calculate price',"
-                                " 'parse CSV config', 'send notification'"
+                                "What you want to do, in natural language."
+                                " Use explicit markers for precision —"
+                                " examples: 'refactor calculate_price() in"
+                                " modules/pricing.py to round half-even',"
+                                " 'fix InvoiceRepo.get_with_items() selectinload',"
+                                " 'rename modules/pricing.py::calc_tax to"
+                                " apply_tax'. Creates may be plain:"
+                                " 'add batch discount feature'."
                             ),
                         },
                         "zone": {
@@ -142,6 +152,47 @@ def register_tools(
                         },
                     },
                     "required": ["intent"],
+                },
+            ),
+            Tool(
+                name="browse",
+                description=(
+                    "List functions with their LLM-generated intents —"
+                    " mid-level inventory between orient and scope."
+                    " Use after orient to skim what functions live in a zone"
+                    " or file, and what each one does, before picking a target"
+                    " for scope/before_create."
+                    " Entries are compact strings:"
+                    " 'file::fn (callers) — intent'  (or no ' — …' when intent"
+                    " is unavailable). Paginated via limit/offset."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "zone": {
+                            "type": "string",
+                            "description": "Filter by zone name (see orient.map.zones).",
+                        },
+                        "file": {
+                            "type": "string",
+                            "description": (
+                                "Filter by exact file path."
+                                " Supersedes zone if both given."
+                            ),
+                        },
+                        "min_callers": {
+                            "type": "integer",
+                            "description": "Hide fns with fewer callers (default 0).",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Page size (default 50, max 100).",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Starting index into sorted results (default 0).",
+                        },
+                    },
                 },
             ),
             Tool(
@@ -201,6 +252,8 @@ def register_tools(
             result = _tool_rule_read(arguments, root)
         elif name == "before_create":
             result = _tool_before_create(graph, arguments, root)
+        elif name == "browse":
+            result = _tool_browse(graph, arguments)
         elif name == "impact_check":
             result = _tool_impact_check(graph, arguments, root, get_graph)
         elif name == "session_done":
@@ -248,7 +301,7 @@ def _load_rules(root: Path):
     return RulesStore(root).load()
 
 
-MAX_ORIENT_TOKENS = 2000
+MAX_ORIENT_TOKENS = 2500
 
 # Priority order: most important sections first for truncation.
 _SECTION_PRIORITY = [
@@ -261,6 +314,34 @@ def _estimate_tokens(data: Any) -> int:
     """Rough token count: ~4 chars per token in JSON output."""
     import json
     return len(json.dumps(data, default=str)) // 4
+
+
+def _try_compact(section: str, data: Any) -> Any | None:
+    """Return a smaller variant of `data` when budget is tight, or None.
+
+    Right now we only know how to shrink `rules_list` (drop wrong_approach
+    and related fields — agents can still see the categories and rule titles,
+    and fetch details via rule_read). Other sections return None, which the
+    caller treats as "skip the section entirely".
+    """
+    if section != "rules_list":
+        return None
+    if not isinstance(data, dict):
+        return None
+    categories = data.get("categories")
+    if not isinstance(categories, dict):
+        return None
+    compact_categories: dict[str, list[dict]] = {}
+    for cat, rules in categories.items():
+        compact_categories[cat] = [
+            {k: v for k, v in r.items() if k in ("id", "title")}
+            for r in rules
+        ]
+    return {
+        "total": data.get("total"),
+        "categories": compact_categories,
+        "_compacted": "titles only — call rule_read(category) for wrong_approach",
+    }
 
 
 def _coerce_include(value: Any) -> list[str]:
@@ -310,6 +391,7 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     result: dict[str, Any] = {}
     used_tokens = 0
     skipped: list[str] = []
+    compacted: list[str] = []
 
     for section in ordered:
         build = builders.get(section)
@@ -318,18 +400,32 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
         data = build()
         section_tokens = _estimate_tokens(data)
         if used_tokens + section_tokens > max_tokens and result:
+            # Try a compact variant before giving up on the section entirely.
+            compact = _try_compact(section, data)
+            if compact is not None:
+                compact_tokens = _estimate_tokens(compact)
+                if used_tokens + compact_tokens <= max_tokens:
+                    result[section] = compact
+                    used_tokens += compact_tokens
+                    compacted.append(section)
+                    continue
             skipped.append(section)
             continue
         result[section] = data
         used_tokens += section_tokens
 
-    if skipped:
+    if skipped or compacted:
         result["_truncated"] = True
-        result["_hint"] = (
-            f"Response truncated at ~{max_tokens} token budget. "
-            f"Skipped: {', '.join(skipped)}. "
-            "Call orient() with fewer includes or filter by zone."
-        )
+        hint_parts = [f"Response constrained to ~{max_tokens} token budget."]
+        if skipped:
+            hint_parts.append(f"Skipped: {', '.join(skipped)}.")
+        if compacted:
+            hint_parts.append(
+                f"Compacted (titles only): {', '.join(compacted)} — "
+                "use rule_read(category) for wrong_approach."
+            )
+        hint_parts.append("Call orient() with fewer includes or filter by zone.")
+        result["_hint"] = " ".join(hint_parts)
 
     if not result:
         result["error"] = (
@@ -812,6 +908,86 @@ def _tool_rule_read(args: dict, root: Path) -> dict:
             for r in matches
         ],
     }
+
+
+_BROWSE_LIMIT_DEFAULT = 50
+_BROWSE_LIMIT_MAX = 100
+
+
+def _tool_browse(graph: Graph, args: dict) -> dict:
+    """List functions with their LLM-generated intents (mid-level inventory).
+
+    Sits between `orient` (zone-level map) and `scope` (single-function
+    deep-dive) — lets an agent skim "what functions exist here and what do
+    they do" before picking a target.
+
+    Args:
+      zone        : filter by zone name (see orient.map.zones).
+      file        : filter by exact file path (supersedes zone if both).
+      min_callers : hide fns with fewer callers than N (default 0).
+      limit       : page size (default 50, max 100).
+      offset      : starting index within the sorted list (default 0).
+
+    Response entries are compact strings:
+      "file::fn (callers) — intent"          if intent present
+      "file::fn (callers)"                   if intent null
+    """
+    zone = args.get("zone") or None
+    file_path = args.get("file") or None
+    min_callers = int(args.get("min_callers", 0) or 0)
+    limit = int(args.get("limit", _BROWSE_LIMIT_DEFAULT) or _BROWSE_LIMIT_DEFAULT)
+    offset = int(args.get("offset", 0) or 0)
+
+    if limit < 1:
+        limit = _BROWSE_LIMIT_DEFAULT
+    if limit > _BROWSE_LIMIT_MAX:
+        limit = _BROWSE_LIMIT_MAX
+    if offset < 0:
+        offset = 0
+
+    def _keep(fn_id: str) -> bool:
+        fn = graph.functions[fn_id]
+        if file_path and fn.file != file_path:
+            return False
+        if zone and graph.file_zone(fn.file) != zone:
+            return False
+        if min_callers and len(graph.callers(fn_id)) < min_callers:
+            return False
+        return True
+
+    matched = sorted(fid for fid in graph.functions if _keep(fid))
+    total = len(matched)
+    page_ids = matched[offset : offset + limit]
+
+    lines: list[str] = []
+    for fid in page_ids:
+        fn = graph.functions[fid]
+        callers_count = len(graph.callers(fid))
+        entry = f"{fid} ({callers_count})"
+        if fn.intent:
+            entry = f"{entry} — {fn.intent}"
+        lines.append(entry)
+
+    result: dict[str, Any] = {
+        "total": total,
+        "shown": len(lines),
+        "offset": offset,
+        "functions": lines,
+    }
+    if offset + len(lines) < total:
+        result["next_offset"] = offset + len(lines)
+    if zone:
+        result["zone"] = zone
+    if file_path:
+        result["file"] = file_path
+    if min_callers:
+        result["min_callers"] = min_callers
+    if total == 0:
+        result["hint"] = (
+            "No functions match. Relax filters — try without zone/file,"
+            " or lower min_callers."
+        )
+    return result
 
 
 def _tool_impact_check(
@@ -1370,11 +1546,14 @@ def _value_changes_block(
 
 
 def _files_block(graph: Graph, file_paths: list[str]) -> dict:
+    from winkers.target_resolution import is_test_path
+
     resolved_set = set(file_paths)
     cross_imports = 0
     external_importers: set[str] = set()
     migration_cost = 0
-    locked_fns = 0
+    prod_locked = 0
+    test_locked = 0
 
     for path in file_paths:
         for edge in graph.imports_from_file(path):
@@ -1388,16 +1567,28 @@ def _files_block(graph: Graph, file_paths: list[str]) -> dict:
         fnode = graph.files.get(path)
         if not fnode:
             continue
+        path_is_test = is_test_path(path)
         for fid in fnode.function_ids:
-            if graph.is_locked(fid):
-                locked_fns += 1
+            if not graph.is_locked(fid):
+                continue
+            if path_is_test:
+                test_locked += 1
+                continue
+            # Prod-file fn: only count as "locked" if it has at least one
+            # production caller. Pytest-fixture-like references from tests
+            # shouldn't inflate the number.
+            if any(not is_test_path(e.call_site.file) for e in graph.callers(fid)):
+                prod_locked += 1
 
-    return {
+    block: dict = {
         "cross_imports": cross_imports,
         "imported_by": sorted(external_importers),
         "migration_cost": migration_cost,
-        "locked_fns": locked_fns,
+        "locked_fns": prod_locked,
     }
+    if test_locked:
+        block["locked_test_fns"] = test_locked
+    return block
 
 
 def _functions_block(

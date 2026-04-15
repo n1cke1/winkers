@@ -8,6 +8,8 @@ from winkers.graph import GraphBuilder
 from winkers.resolver import CrossFileResolver
 from winkers.target_resolution import (
     categorize_intent,
+    extract_explicit_targets,
+    is_test_path,
     resolve_targets,
 )
 
@@ -104,3 +106,158 @@ def test_resolve_targets_word_boundary(graph):
     # No function is literally named 'calculate' in the fixture.
     names_found = {fid.split("::")[-1] for fid in t.functions}
     assert "calculate_price" not in names_found
+
+
+# ---------------------------------------------------------------------------
+# extract_explicit_targets
+# ---------------------------------------------------------------------------
+
+def test_extract_explicit_targets_fn_calls():
+    """`fn_name()` syntax yields explicit function targets."""
+    fns, paths = extract_explicit_targets("rename calculate_price() to compute_price()")
+    assert "calculate_price" in fns
+    assert "compute_price" in fns
+    assert paths == set()
+
+
+def test_extract_explicit_targets_class_method():
+    """`Class.method()` yields the dotted form as an explicit fn."""
+    fns, _ = extract_explicit_targets(
+        "fix InvoiceRepo.get_with_items() selectinload"
+    )
+    assert "InvoiceRepo.get_with_items" in fns
+
+
+def test_extract_explicit_targets_paths_forward_and_back_slash():
+    """Paths with forward and back slashes are both captured, normalized to /."""
+    fns, paths = extract_explicit_targets(
+        "fix error handling in app/repos/invoice.py and in app\\repos\\client.py"
+    )
+    assert "app/repos/invoice.py" in paths
+    assert "app/repos/client.py" in paths
+    assert fns == set()
+
+
+def test_extract_explicit_targets_double_colon():
+    """`file.py::fn` and `file.py::Class.method` are parsed."""
+    fns, paths = extract_explicit_targets(
+        "modify modules/pricing.py::calculate_price and "
+        "app/repos/invoice.py::InvoiceRepo.get_with_items"
+    )
+    assert "modules/pricing.py" in paths
+    assert "app/repos/invoice.py" in paths
+    assert "calculate_price" in fns
+    assert "InvoiceRepo.get_with_items" in fns
+
+
+def test_extract_explicit_targets_filters_keywords():
+    """Language keywords before `(` are not mistaken for function names."""
+    fns, _ = extract_explicit_targets(
+        "if (ready) return something; else while (x) continue"
+    )
+    # None of these control-flow words should appear as fn targets.
+    for kw in ("if", "return", "while", "else", "continue"):
+        assert kw not in fns
+
+
+def test_extract_explicit_targets_empty_intent():
+    """Empty input returns empty sets, not None."""
+    fns, paths = extract_explicit_targets("")
+    assert fns == set()
+    assert paths == set()
+
+
+# ---------------------------------------------------------------------------
+# test-path filter
+# ---------------------------------------------------------------------------
+
+def test_is_test_path_various():
+    assert is_test_path("tests/test_pricing.py")
+    assert is_test_path("app/tests/unit.py")
+    assert is_test_path("pkg/test/helpers.py")
+    assert is_test_path("pkg\\tests\\win.py")
+    assert is_test_path("tests/conftest.py")
+    assert not is_test_path("app/repos/invoice.py")
+    assert not is_test_path("modules/pricing.py")
+
+
+def test_resolve_targets_fuzzy_drops_test_paths():
+    """Fuzzy path match that hits test/ files is filtered unless intent targets tests."""
+    from winkers.graph import GraphBuilder
+    from winkers.models import FileNode, FunctionNode
+
+    g = GraphBuilder().build(PYTHON_FIXTURE)
+    # Inject a fake test-file entry so that fuzzy matching finds it via basename.
+    g.files["tests/test_pricing.py"] = FileNode(
+        path="tests/test_pricing.py", language="python", imports=[],
+        function_ids=["tests/test_pricing.py::test_calculate_price"],
+    )
+    g.functions["tests/test_pricing.py::test_calculate_price"] = FunctionNode(
+        id="tests/test_pricing.py::test_calculate_price",
+        file="tests/test_pricing.py", name="test_calculate_price",
+        kind="function", language="python", line_start=1, line_end=1, params=[],
+    )
+    # Intent mentions calculate_price and pricing.py — no test markers.
+    t = resolve_targets("simplify calculate_price in pricing.py", g)
+    assert "tests/test_pricing.py" not in t.paths
+    assert "tests/test_pricing.py::test_calculate_price" not in t.functions
+
+
+def test_resolve_targets_includes_tests_when_intent_path_like_markers():
+    """Intent with `tests/` or `test_` path-like tokens includes test files."""
+    from winkers.graph import GraphBuilder
+    from winkers.models import FileNode, FunctionNode
+
+    g = GraphBuilder().build(PYTHON_FIXTURE)
+    g.files["tests/test_pricing.py"] = FileNode(
+        path="tests/test_pricing.py", language="python", imports=[],
+        function_ids=["tests/test_pricing.py::test_calculate_price"],
+    )
+    g.functions["tests/test_pricing.py::test_calculate_price"] = FunctionNode(
+        id="tests/test_pricing.py::test_calculate_price",
+        file="tests/test_pricing.py", name="test_calculate_price",
+        kind="function", language="python", line_start=1, line_end=1, params=[],
+    )
+    t = resolve_targets("update tests/test_pricing.py after rename", g)
+    assert "tests/test_pricing.py" in t.paths
+
+
+def test_resolve_targets_bare_add_tests_does_not_pull_tests():
+    """`add tests for X` is not a path-like marker — tests still filtered.
+
+    This is the core Issue #4 fix: fuzzy match on "X" finds prod files
+    AND test files, but test files are dropped.
+    """
+    from winkers.graph import GraphBuilder
+    from winkers.models import FileNode, FunctionNode
+
+    g = GraphBuilder().build(PYTHON_FIXTURE)
+    g.files["tests/test_pricing.py"] = FileNode(
+        path="tests/test_pricing.py", language="python", imports=[],
+        function_ids=["tests/test_pricing.py::test_calculate_price"],
+    )
+    g.functions["tests/test_pricing.py::test_calculate_price"] = FunctionNode(
+        id="tests/test_pricing.py::test_calculate_price",
+        file="tests/test_pricing.py", name="test_calculate_price",
+        kind="function", language="python", line_start=1, line_end=1, params=[],
+    )
+    t = resolve_targets("add comprehensive tests for calculate_price", g)
+    # Bare "tests" is not path-like — test files are still filtered.
+    assert "tests/test_pricing.py" not in t.paths
+
+
+def test_resolve_targets_explicit_fn_filters_tests(graph):
+    """Explicit `fn()` resolves to prod fn only, even when a same-named test fn exists."""
+    from winkers.models import FunctionNode
+    # Re-use the fixture graph; inject a homonymous test function.
+    graph.functions["tests/test_pricing.py::calculate_price"] = FunctionNode(
+        id="tests/test_pricing.py::calculate_price",
+        file="tests/test_pricing.py", name="calculate_price",
+        kind="function", language="python", line_start=1, line_end=1, params=[],
+    )
+    try:
+        t = resolve_targets("refactor calculate_price() to round half-even", graph)
+        assert "tests/test_pricing.py::calculate_price" not in t.functions
+        assert "modules/pricing.py::calculate_price" in t.functions
+    finally:
+        graph.functions.pop("tests/test_pricing.py::calculate_price", None)

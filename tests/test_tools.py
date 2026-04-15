@@ -12,6 +12,7 @@ from winkers.mcp.tools import (
     _section_map,
     _section_rules_list,
     _tool_before_create,
+    _tool_browse,
     _tool_orient,
     _tool_scope,
 )
@@ -448,6 +449,231 @@ def test_orient_respects_priority_order(graph, tmp_path):
     )
     # map should be present (higher priority), functions_graph skipped
     assert "map" in result
+
+
+def test_orient_default_budget_is_2500():
+    """Bumped budget: single source of truth for the size cap."""
+    from winkers.mcp.tools import MAX_ORIENT_TOKENS
+    assert MAX_ORIENT_TOKENS == 2500
+
+
+def test_orient_compacts_rules_when_over_budget(graph, tmp_path):
+    """When rules_list doesn't fit, return titles-only variant instead of skipping."""
+    # Seed a rules.json with rich wrong_approach text so the full section is
+    # clearly over a tight budget, but titles alone fit.
+    from winkers.conventions import ConventionRule, RulesFile, RulesStore
+    rules = RulesFile(rules=[
+        ConventionRule(
+            id=i, category="style", title=f"Rule {i}",
+            content="Lorem ipsum dolor sit amet " * 10,
+            wrong_approach="Do not do the thing in the detailed prohibitive sentence" * 5,
+            source="manual",
+            created="2026-04-15",
+        )
+        for i in range(1, 6)
+    ])
+    RulesStore(tmp_path).save(rules)
+
+    # Request map + rules_list. Tight budget: map fits in priority order,
+    # rules_list full form would overflow, compact (titles-only) fits.
+    result = _tool_orient(
+        graph,
+        {"include": ["map", "rules_list"], "max_tokens": 250},
+        tmp_path,
+    )
+    # rules_list survives but as compact-only.
+    assert "rules_list" in result
+    rules_out = result["rules_list"]
+    assert rules_out.get("_compacted")
+    # Compacted entries contain title but not wrong_approach.
+    for _cat, entries in rules_out["categories"].items():
+        for entry in entries:
+            assert "title" in entry
+            assert "wrong_approach" not in entry
+    assert result.get("_truncated") is True
+    assert "Compacted" in result["_hint"]
+
+
+# ---------------------------------------------------------------------------
+# _files_block — prod / test split for locked_fns (Issue #4 fix)
+# ---------------------------------------------------------------------------
+
+def test_files_block_excludes_test_callers_from_locked_fns(graph, tmp_path):
+    """A prod function whose only callers live in tests/ is not counted as locked.
+
+    Pytest-fixture injection creates spurious call_edges that used to inflate
+    `locked_fns` on medium-sized projects (Issue #4 in the benchmark report).
+    """
+    from winkers.mcp.tools import _files_block
+    from winkers.models import CallEdge, CallSite, FileNode, FunctionNode
+
+    # Clone the graph so other tests aren't affected.
+    g = graph.model_copy(deep=True)
+    # Inject a prod file + fn with ONLY a test caller.
+    prod_path = "modules/lonely.py"
+    prod_fn = "modules/lonely.py::only_tests_call_me"
+    g.files[prod_path] = FileNode(
+        path=prod_path, language="python", imports=[],
+        function_ids=[prod_fn],
+    )
+    g.functions[prod_fn] = FunctionNode(
+        id=prod_fn, file=prod_path, name="only_tests_call_me",
+        kind="function", language="python",
+        line_start=1, line_end=1, params=[],
+    )
+    g.call_edges.append(CallEdge(
+        source_fn="tests/test_lonely.py::test_only_tests_call_me",
+        target_fn=prod_fn,
+        call_site=CallSite(
+            caller_fn_id="tests/test_lonely.py::test_only_tests_call_me",
+            file="tests/test_lonely.py", line=5,
+            expression="only_tests_call_me()",
+        ),
+    ))
+
+    block = _files_block(g, [prod_path])
+    # Prod fn with only a test caller → not counted as locked.
+    assert block["locked_fns"] == 0
+
+
+# ---------------------------------------------------------------------------
+# browse — mid-level function inventory
+# ---------------------------------------------------------------------------
+
+def test_browse_lists_all_functions(graph):
+    """Default call returns every function as a compact string."""
+    result = _tool_browse(graph, {})
+    assert result["total"] == len(graph.functions)
+    assert result["shown"] <= 50
+    assert isinstance(result["functions"], list)
+    # Every entry is a string starting with "file::fn_name".
+    for line in result["functions"]:
+        assert isinstance(line, str)
+        assert "::" in line
+
+
+def test_browse_entry_format_with_intent(graph):
+    """Entries with an LLM intent render as 'fid (callers) — intent'."""
+    fn = graph.functions["modules/pricing.py::calculate_price"]
+    saved = fn.intent
+    fn.intent = "computes final price for an item"
+    try:
+        result = _tool_browse(graph, {"file": "modules/pricing.py"})
+        line = next(
+            line for line in result["functions"]
+            if line.startswith("modules/pricing.py::calculate_price")
+        )
+        assert " — computes final price for an item" in line
+        # Callers count in parens, directly after fn_id.
+        assert "modules/pricing.py::calculate_price (" in line
+    finally:
+        fn.intent = saved
+
+
+def test_browse_entry_format_without_intent(graph):
+    """Entries without intent omit the em-dash suffix — shown only as 'fid (callers)'."""
+    fn = graph.functions["modules/pricing.py::calculate_price"]
+    saved = fn.intent
+    fn.intent = None
+    try:
+        result = _tool_browse(graph, {"file": "modules/pricing.py"})
+        line = next(
+            line for line in result["functions"]
+            if line.startswith("modules/pricing.py::calculate_price")
+        )
+        # No em-dash, no trailing intent text.
+        assert " — " not in line
+        assert line.endswith(")")
+    finally:
+        fn.intent = saved
+
+
+def test_browse_zone_filter(graph):
+    """zone filter restricts results to one zone."""
+    result = _tool_browse(graph, {"zone": "modules"})
+    assert result["zone"] == "modules"
+    # Every returned fn must live under modules/.
+    for line in result["functions"]:
+        fid = line.split(" ", 1)[0]
+        file = fid.split("::", 1)[0]
+        assert graph.file_zone(file) == "modules"
+
+
+def test_browse_file_filter(graph):
+    """file filter restricts results to one file."""
+    result = _tool_browse(graph, {"file": "modules/pricing.py"})
+    assert result["file"] == "modules/pricing.py"
+    for line in result["functions"]:
+        fid = line.split(" ", 1)[0]
+        assert fid.startswith("modules/pricing.py::")
+
+
+def test_browse_min_callers_filter(graph):
+    """min_callers hides functions with fewer callers than threshold."""
+    result = _tool_browse(graph, {"min_callers": 1})
+    for line in result["functions"]:
+        fid = line.split(" ", 1)[0]
+        assert len(graph.callers(fid)) >= 1
+
+
+def test_browse_pagination(graph):
+    """offset/limit paginate; next_offset appears while more items remain."""
+    first = _tool_browse(graph, {"limit": 2, "offset": 0})
+    assert first["shown"] == 2
+    if first["total"] > 2:
+        assert first.get("next_offset") == 2
+        second = _tool_browse(graph, {"limit": 2, "offset": 2})
+        assert second["offset"] == 2
+        # No overlap with first page.
+        assert set(first["functions"]).isdisjoint(set(second["functions"]))
+    else:
+        assert "next_offset" not in first
+
+
+def test_browse_limit_clamped_to_max(graph):
+    """limit above 100 clamps silently to 100 (no error)."""
+    result = _tool_browse(graph, {"limit": 500})
+    assert result["shown"] <= 100
+
+
+def test_browse_empty_match_returns_hint(graph):
+    """When filters exclude everything, include a hint instead of silent empty."""
+    result = _tool_browse(graph, {"zone": "nonexistent-zone"})
+    assert result["total"] == 0
+    assert result["functions"] == []
+    assert "hint" in result
+
+
+def test_files_block_counts_test_fixtures_separately(graph, tmp_path):
+    """Locked functions inside tests/ files increment `locked_test_fns`, not `locked_fns`."""
+    from winkers.mcp.tools import _files_block
+    from winkers.models import CallEdge, CallSite, FileNode, FunctionNode
+
+    g = graph.model_copy(deep=True)
+    test_path = "tests/conftest.py"
+    fixture_fn = "tests/conftest.py::client_fixture"
+    user_fn = "tests/test_api.py::test_login"
+    g.files[test_path] = FileNode(
+        path=test_path, language="python", imports=[],
+        function_ids=[fixture_fn],
+    )
+    g.functions[fixture_fn] = FunctionNode(
+        id=fixture_fn, file=test_path, name="client_fixture",
+        kind="function", language="python",
+        line_start=1, line_end=1, params=[],
+    )
+    # Another test "calls" the fixture (pytest-fixture-injection style).
+    g.call_edges.append(CallEdge(
+        source_fn=user_fn, target_fn=fixture_fn,
+        call_site=CallSite(
+            caller_fn_id=user_fn, file="tests/test_api.py", line=3,
+            expression="client_fixture",
+        ),
+    ))
+
+    block = _files_block(g, [test_path])
+    assert block["locked_fns"] == 0
+    assert block.get("locked_test_fns") == 1
 
 
 # ---------------------------------------------------------------------------

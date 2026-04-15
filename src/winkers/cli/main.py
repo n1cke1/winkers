@@ -826,7 +826,7 @@ def _install_claude_code(root: Path) -> None:
     winkers_bin = _shutil.which("winkers") or "winkers"
     _install_session_hook(root, winkers_bin)
     _install_claude_md_snippet(root)
-    _install_semantic_summary(root)
+    _install_winkers_pointer(root)
 
 
 def _remove_user_scope_mcp() -> None:
@@ -897,57 +897,66 @@ def _install_claude_md_snippet(root: Path) -> None:
     click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
 
 
-_SEM_START = "<!-- winkers-semantic-start -->"
-_SEM_END = "<!-- winkers-semantic-end -->"
+# Old semantic-summary markers — kept only for the one-shot migration that
+# rewrites them into the new pointer block. New installs use _WINKERS_*.
+_OLD_SEM_START = "<!-- winkers-semantic-start -->"
+_OLD_SEM_END = "<!-- winkers-semantic-end -->"
+
+_WINKERS_START = "<!-- winkers-start -->"
+_WINKERS_END = "<!-- winkers-end -->"
+
+_POINTER_BLOCK = (
+    f"{_WINKERS_START}\n"
+    "### Winkers\n\n"
+    "This project uses Winkers (function-level dependency graph + semantic layer"
+    " + coding rules). Before non-trivial edits call"
+    " `orient(include=[\"map\",\"conventions\",\"rules_list\"])`"
+    " for zones, data flow, domain context, and rules.\n"
+    f"{_WINKERS_END}"
+)
 
 
-def _install_semantic_summary(root: Path) -> None:
-    """Append or update a short semantic summary block in CLAUDE.md.
+def _install_winkers_pointer(root: Path) -> None:
+    """Ensure CLAUDE.md has a single static Winkers pointer block.
 
-    Reads semantic.json and writes ~200 tokens of data_flow, domain_context,
-    and constraints so the agent has project context before its first tool call.
+    The pointer is a short pointer to `orient` — it does NOT duplicate
+    semantic.json content. Orient is the single source of truth for
+    data_flow / domain_context / zones / rules, so there is nothing to drift.
+
+    Migration: older CLAUDE.md files may contain the deprecated
+    `<!-- winkers-semantic-start -->` block with verbatim semantic data;
+    we replace it in-place on the next run.
     """
-    from winkers.semantic import SemanticStore
-
     claude_md = root / "CLAUDE.md"
     if not claude_md.exists():
         return
 
-    sem = SemanticStore(root).load()
-    if sem is None:
-        return
-
-    lines: list[str] = []
-    if sem.data_flow:
-        lines.append(f"- **Data flow**: {sem.data_flow}")
-    if sem.domain_context:
-        lines.append(f"- **Domain**: {sem.domain_context}")
-    if sem.constraints:
-        for c in sem.constraints[:3]:
-            lines.append(f"- **Constraint**: {c}")
-
-    if not lines:
-        return
-
-    block = (
-        f"{_SEM_START}\n"
-        "### Project context (auto-generated)\n\n"
-        + "\n".join(lines) + "\n"
-        f"{_SEM_END}"
-    )
-
     existing = claude_md.read_text(encoding="utf-8")
 
-    if _SEM_START in existing:
-        start = existing.index(_SEM_START)
-        end = existing.index(_SEM_END) + len(_SEM_END)
-        updated = existing[:start] + block + existing[end:]
+    # One-shot migration of the old semantic-summary block.
+    if _OLD_SEM_START in existing and _OLD_SEM_END in existing:
+        s = existing.index(_OLD_SEM_START)
+        e = existing.index(_OLD_SEM_END) + len(_OLD_SEM_END)
+        updated = existing[:s] + _POINTER_BLOCK + existing[e:]
         claude_md.write_text(updated, encoding="utf-8")
-    else:
-        claude_md.write_text(
-            existing.rstrip() + "\n\n" + block + "\n", encoding="utf-8"
-        )
-    click.echo("  [ok] Updated CLAUDE.md with semantic summary")
+        click.echo("  [ok] Migrated CLAUDE.md semantic block → Winkers pointer")
+        return
+
+    if _WINKERS_START in existing and _WINKERS_END in existing:
+        s = existing.index(_WINKERS_START)
+        e = existing.index(_WINKERS_END) + len(_WINKERS_END)
+        # Idempotent — if block is already up to date, skip the write.
+        if existing[s:e] == _POINTER_BLOCK:
+            return
+        updated = existing[:s] + _POINTER_BLOCK + existing[e:]
+        claude_md.write_text(updated, encoding="utf-8")
+        click.echo("  [ok] Refreshed CLAUDE.md Winkers pointer")
+        return
+
+    claude_md.write_text(
+        existing.rstrip() + "\n\n" + _POINTER_BLOCK + "\n", encoding="utf-8"
+    )
+    click.echo("  [ok] Added Winkers pointer to CLAUDE.md")
 
 
 def _install_session_hook(root: Path, winkers_bin: str) -> None:
