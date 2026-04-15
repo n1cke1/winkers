@@ -147,7 +147,7 @@ class TestBeforeCreateValueChanges:
         assert "VALID_STATUSES" in result["value_changes"]
         warning = result["value_changes"]["VALID_STATUSES"]
         assert warning["value_locked"] is True
-        assert "safe_alternative" in warning
+        assert "total_literal_uses" in warning
 
     def test_additive_intent_does_not_warn(self, graph):
         g, project = graph

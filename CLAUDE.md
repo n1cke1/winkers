@@ -75,7 +75,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes. Function-level response also returns pre-computed `impact` (risk_level/safe+dangerous ops/classified callers/action_plan) and `similar_logic` (functions sharing `secondary_intents`) when impact.json exists.
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
 - `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
-- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph; for `change` returns adaptive payload (`files` block with coupling/migration_cost/safe_alternative, `functions` block with affected_fns + caller expressions + `risk_level` + `dangerous_operations`, and a `similar_logic` warning when the target shares `secondary_intents` with other functions)
+- `before_create(intent, zone?)` — classifies intent (create / change / unknown), resolves targets from graph; for `change` returns adaptive payload (`files` block with coupling/migration_cost, `functions` block with affected_fns + caller expressions + `risk_level` + `dangerous_operations`, and a `similar_logic` warning when the target shares `secondary_intents` with other functions)
 - `impact_check(file_path)` — incremental graph update, impact analysis, coherence check, session state (renamed from `after_create` in 0.8.1)
 - `session_done()` — optional final session audit across all writes; anti-loop (FAIL max once)
 
