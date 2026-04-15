@@ -123,6 +123,11 @@ class MonsterFile(BaseModel):
 
 class SemanticLayer(BaseModel):
     data_flow: str = ""
+    # fn_ids that the data_flow narrative is grounded in. Populated
+    # deterministically from graph centrality before the LLM is called, so
+    # an agent consuming `data_flow` has verified scope inputs without
+    # parsing prose.
+    data_flow_targets: list[str] = []
     domain_context: str = ""
     zone_intents: dict[str, ZoneIntent] = {}
     monster_files: dict[str, MonsterFile] = {}
@@ -181,6 +186,95 @@ def _graph_hash(graph: Graph, root: Path) -> str:
     return h.hexdigest()
 
 
+def _select_data_flow_targets(
+    graph: Graph, max_total: int = 12,
+) -> list:
+    """Pick functions to seed the `data_flow` narrative.
+
+    Strategy (deterministic, no LLM):
+    1. All route handlers — true entry points, always include first.
+    2. Top-N remaining by (callers + callees), excluding dunders/private,
+       requiring at least one edge so we don't list isolated functions.
+
+    Capped at `max_total`. Returned in selection order: routes first, then
+    centrality-sorted descending. Caller centrality is computed once via
+    a degree map to avoid O(F*E) scans on large graphs.
+    """
+    # Precompute degrees once: avoids quadratic graph.callers/callees calls.
+    in_deg: dict[str, int] = {}
+    out_deg: dict[str, int] = {}
+    for edge in graph.call_edges:
+        in_deg[edge.target_fn] = in_deg.get(edge.target_fn, 0) + 1
+        out_deg[edge.source_fn] = out_deg.get(edge.source_fn, 0) + 1
+
+    selected: list = []
+    seen: set[str] = set()
+
+    # Routes first — entry points take precedence regardless of degree.
+    for fn in graph.functions.values():
+        if fn.route and fn.id not in seen:
+            selected.append(fn)
+            seen.add(fn.id)
+            if len(selected) >= max_total:
+                return selected
+
+    # Then central functions, skipping privates and isolated ones.
+    candidates = [
+        fn for fn in graph.functions.values()
+        if fn.id not in seen and not fn.name.startswith("_")
+        and (in_deg.get(fn.id, 0) + out_deg.get(fn.id, 0)) > 0
+    ]
+    candidates.sort(
+        key=lambda f: in_deg.get(f.id, 0) + out_deg.get(f.id, 0),
+        reverse=True,
+    )
+    for fn in candidates:
+        if len(selected) >= max_total:
+            break
+        selected.append(fn)
+        seen.add(fn.id)
+    return selected
+
+
+def _format_data_flow_targets_section(targets: list, graph: Graph) -> str:
+    """Render the ground-truth function list for the prompt.
+
+    Each line gives the LLM the *display name* it should use in narrative
+    (`name()` or `Class.method()`) plus structural metadata. The agent
+    consuming `data_flow` later uses `data_flow_targets` (saved fn_ids)
+    rather than parsing the narrative, so display fidelity matters more
+    than structural fidelity in the rendered prose.
+    """
+    if not targets:
+        return ""
+    in_deg: dict[str, int] = {}
+    out_deg: dict[str, int] = {}
+    for edge in graph.call_edges:
+        in_deg[edge.target_fn] = in_deg.get(edge.target_fn, 0) + 1
+        out_deg[edge.source_fn] = out_deg.get(edge.source_fn, 0) + 1
+
+    lines = [
+        "## Data flow targets — REQUIRED references for `data_flow`",
+        "",
+        "When you write the `data_flow` field, you MUST trace data through",
+        "AT LEAST 6 of the functions listed below. Reference each as",
+        "`name()` or `Class.method()` exactly as displayed. Do NOT invent",
+        "function names. Do NOT write a layer-only architectural overview",
+        "(e.g. 'API → services → repos') — the consumer is an AI agent",
+        "that needs concrete jump targets, not abstract category names.",
+        "",
+    ]
+    for fn in targets:
+        display = f"{fn.class_name}.{fn.name}" if fn.class_name else fn.name
+        meta_parts = []
+        if fn.route:
+            meta_parts.append(f"route={fn.http_method or 'GET'} {fn.route}")
+        meta_parts.append(f"callers={in_deg.get(fn.id, 0)}")
+        meta_parts.append(f"callees={out_deg.get(fn.id, 0)}")
+        lines.append(f"- `{display}()`  ({fn.file}; {', '.join(meta_parts)})")
+    return "\n".join(lines)
+
+
 def _build_project_summary(graph: Graph, root: Path) -> str:
     """Build a compact text summary of the project for the API prompt."""
     zones: dict[str, dict[str, list[str]]] = {}
@@ -229,7 +323,7 @@ def _build_project_summary(graph: Graph, root: Path) -> str:
 
 SCHEMA_TEXT = """\
 {
-  "data_flow": "One paragraph: how data moves through the system, naming key functions.",
+  "data_flow": "One paragraph tracing data through the system. MUST reference at least 6 functions from the 'Data flow targets' section above, formatted as `name()` or `Class.method()`. Layer-only descriptions (API → services → repos) without concrete function names are unacceptable.",
   "domain_context": "2-3 sentences: what domain concepts mean for the code.",
   "zone_intents": {
     "<zone_or_file>": {"why": "...", "wrong_approach": "..."}
@@ -375,6 +469,16 @@ class SemanticEnricher:
 
         user_msg = "Here is the project:\n" + project_text
 
+        # Compute data_flow targets deterministically and feed them to the LLM
+        # as a required reference list. The same list is saved on the layer so
+        # consumers don't need to parse the narrative for jump targets.
+        data_flow_targets = _select_data_flow_targets(graph)
+        targets_section = _format_data_flow_targets_section(
+            data_flow_targets, graph,
+        )
+        if targets_section:
+            user_msg += "\n\n---\n\n" + targets_section
+
         if insights_text:
             user_msg += "\n\n---\n\n" + insights_text
 
@@ -443,6 +547,11 @@ class SemanticEnricher:
             rules_audit = _parse_rules_audit(raw_audit)
         except Exception as e:
             raise RuntimeError(f"Semantic enrichment failed: {e}") from e
+
+        # Persist the targets the LLM was grounded on. These are graph-verified
+        # fn_ids — agents can pass them directly to `scope` without re-parsing
+        # the narrative or guessing.
+        layer.data_flow_targets = [fn.id for fn in data_flow_targets]
 
         usage = getattr(response, "usage", None)
         elapsed = time.monotonic() - _start
