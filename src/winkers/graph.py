@@ -204,6 +204,7 @@ class GraphBuilder:
         imports = self._extract_imports(parse_result)
         fn_ids = self._extract_functions(parse_result, rel, graph)
         self._extract_routes(parse_result, rel, graph)
+        self._extract_class_attr_types(parse_result, rel, graph)
 
         # Skip files with no functions and no imports (likely unparseable)
         if not fn_ids and not imports:
@@ -265,12 +266,13 @@ class GraphBuilder:
             docstring = self._extract_docstring(def_node, parse_result)
             is_async = self._node_has_async(def_node, parse_result)
             complexity = self._cyclomatic_complexity(def_node)
+            class_name = self._find_containing_class(def_node, parse_result)
 
             fn = FunctionNode(
                 id=fn_id,
                 file=rel,
                 name=name,
-                kind="function",
+                kind="method" if class_name else "function",
                 language=profile.language,
                 line_start=def_node.start_point[0] + 1,
                 line_end=def_node.end_point[0] + 1,
@@ -280,11 +282,146 @@ class GraphBuilder:
                 is_async=is_async,
                 lines=def_node.end_point[0] - def_node.start_point[0] + 1,
                 complexity=complexity,
+                class_name=class_name,
             )
             graph.functions[fn_id] = fn
             fn_ids.append(fn_id)
 
         return fn_ids
+
+    def _find_containing_class(self, def_node, parse_result: ParseResult) -> str | None:
+        """Walk up AST; return class name if def is inside a class, else None.
+
+        Handles Python `class_definition`. Non-Python languages return None
+        for now — heuristic self-attr resolver is Python-only.
+        """
+        if parse_result.profile.language != "python":
+            return None
+        node = def_node.parent
+        while node is not None:
+            if node.type == "class_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node is not None:
+                    return parse_result.text(name_node)
+                return None
+            node = node.parent
+        return None
+
+    def _extract_class_attr_types(
+        self, parse_result: ParseResult, rel: str, graph: Graph,
+    ) -> None:
+        """Scan each class's __init__ for `self.X = ClassName(...)` patterns.
+
+        Populates graph.class_files[class_name] = file_path and
+        graph.class_attr_types[class_name][attr] = target_class_name.
+
+        Scope (MVP, matching Task 2 limits):
+        - Only direct `self.X = ClassName(...)` or `self.X = mod.ClassName(...)`
+        - Capitalized constructor heuristic; lowercase callables treated as
+          factories and skipped.
+        - DI via constructor parameters, chained self-attrs, conditional
+          assignments, and @property accessors are out of scope.
+
+        If two classes share a name across files, the second occurrence is
+        skipped (ambiguity collapse kept explicit to avoid silent wrong edges).
+        """
+        if parse_result.profile.language != "python":
+            return
+        root = parse_result.tree.root_node
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if node.type == "class_definition":
+                self._process_class_node(node, rel, parse_result, graph)
+            for child in node.children:
+                stack.append(child)
+
+    def _process_class_node(
+        self, cls_node, rel: str, parse_result: ParseResult, graph: Graph,
+    ) -> None:
+        name_node = cls_node.child_by_field_name("name")
+        if name_node is None:
+            return
+        class_name = parse_result.text(name_node)
+        prior = graph.class_files.get(class_name)
+        if prior is not None and prior != rel:
+            # Ambiguous class name across files — mark unresolved by removing.
+            graph.class_files.pop(class_name, None)
+            graph.class_attr_types.pop(class_name, None)
+            return
+        graph.class_files[class_name] = rel
+        attr_map = self._scan_init_assignments(cls_node, parse_result)
+        if attr_map:
+            graph.class_attr_types[class_name] = attr_map
+
+    def _scan_init_assignments(
+        self, cls_node, parse_result: ParseResult,
+    ) -> dict[str, str]:
+        """Return {attr_name: target_class_name} for self.X = ClassName(...)."""
+        out: dict[str, str] = {}
+        body = cls_node.child_by_field_name("body")
+        if body is None:
+            return out
+        for child in body.children:
+            fn_node = child
+            if child.type == "decorated_definition":
+                fn_node = next(
+                    (c for c in child.children if c.type == "function_definition"),
+                    None,
+                )
+            if fn_node is None or fn_node.type != "function_definition":
+                continue
+            name_node = fn_node.child_by_field_name("name")
+            if name_node is None or parse_result.text(name_node) != "__init__":
+                continue
+            init_body = fn_node.child_by_field_name("body")
+            if init_body is None:
+                continue
+            for stmt in init_body.children:
+                if stmt.type != "expression_statement":
+                    continue
+                for inner in stmt.children:
+                    if inner.type == "assignment":
+                        hit = self._classify_self_assign(inner, parse_result)
+                        if hit is not None:
+                            attr, target_class = hit
+                            out[attr] = target_class
+        return out
+
+    @staticmethod
+    def _classify_self_assign(
+        assign_node, parse_result: ParseResult,
+    ) -> tuple[str, str] | None:
+        """Return (attr, ClassName) if node is `self.X = ClassName(...)`."""
+        lhs = assign_node.child_by_field_name("left")
+        rhs = assign_node.child_by_field_name("right")
+        if lhs is None or rhs is None or lhs.type != "attribute":
+            return None
+        lhs_obj = lhs.child_by_field_name("object")
+        lhs_attr = lhs.child_by_field_name("attribute")
+        if (lhs_obj is None or lhs_attr is None
+                or lhs_obj.type != "identifier"
+                or parse_result.text(lhs_obj) != "self"):
+            return None
+        attr_name = parse_result.text(lhs_attr)
+        if rhs.type != "call":
+            return None
+        fn_field = rhs.child_by_field_name("function")
+        if fn_field is None:
+            return None
+        if fn_field.type == "identifier":
+            ctor_name = parse_result.text(fn_field)
+        elif fn_field.type == "attribute":
+            attr = fn_field.child_by_field_name("attribute")
+            if attr is None:
+                return None
+            ctor_name = parse_result.text(attr)
+        else:
+            return None
+        # Capitalized → constructor heuristic. Skip factories.
+        if not ctor_name or not ctor_name[0].isupper():
+            return None
+        return attr_name, ctor_name
 
     def _extract_params(self, param_nodes: list, parse_result: ParseResult) -> list[Param]:
         if not param_nodes:

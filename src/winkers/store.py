@@ -64,6 +64,15 @@ class GraphStore:
                 if e.source_file not in changed_files
             ]
 
+        # Drop class metadata for changed files — will be rebuilt by _parse_file.
+        changed_set = set(changed_files)
+        stale_classes = [
+            cls for cls, f in graph.class_files.items() if f in changed_set
+        ]
+        for cls in stale_classes:
+            graph.class_files.pop(cls, None)
+            graph.class_attr_types.pop(cls, None)
+
         # Reparse changed files
         for rel in changed_files:
             from winkers.languages import get_profile_for_file
