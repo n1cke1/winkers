@@ -174,26 +174,32 @@ class ImpactGenerator:
     # -- internals -----------------------------------------------------------
 
     def _resolve_provider(self):
-        """Only providers that support structured JSON are usable here."""
-        from winkers.intent.provider import ApiProvider, NoneProvider, auto_detect
+        """Claude API preferred, Ollama supported (via format=json + retry).
+
+        NoneProvider → skip the impact pass entirely. Any other configured
+        provider (Api or Ollama) participates — quality tradeoff is on the
+        user who chose the small local model.
+        """
+        from winkers.intent.provider import (
+            ApiProvider,
+            NoneProvider,
+            OllamaProvider,
+            auto_detect,
+        )
 
         provider = auto_detect(self.intent_cfg)
         if isinstance(provider, NoneProvider):
             return None
-        if not isinstance(provider, ApiProvider):
-            # Ollama is unreliable for structured JSON — skip impact pass
-            # but leave a debug note. The caller still has fn.intent via the
-            # old intent pipeline.
-            log.info(
-                "impact: provider=%s does not support combined analysis; "
-                "leave impact.json untouched",
-                type(provider).__name__,
-            )
-            return None
-        return provider
+        if isinstance(provider, (ApiProvider, OllamaProvider)):
+            return provider
+        log.info(
+            "impact: provider=%s is not supported for combined analysis",
+            type(provider).__name__,
+        )
+        return None
 
     def _provider_model(self, provider) -> str:
-        return getattr(provider, "model", "") or self.intent_cfg.api_model
+        return getattr(provider, "model", "") or self.intent_cfg.api_model or self.intent_cfg.model
 
     def _run_batch(
         self, provider, ctxs: list[FunctionContext], impact_file: ImpactFile,
@@ -204,10 +210,16 @@ class ImpactGenerator:
 
         def worker(ctx: FunctionContext):
             prompt = build_prompt(ctx, max_callers=max_callers)
-            raw = _call_provider(provider, prompt)
-            if not raw:
-                return ctx, None
-            return ctx, parse_response(raw)
+            # Up to 3 attempts — mainly helps Ollama, which can occasionally
+            # return half-JSON even with format=json.
+            for _ in range(3):
+                raw = _call_provider(provider, prompt)
+                if not raw:
+                    continue
+                parsed = parse_response(raw)
+                if parsed is not None:
+                    return ctx, parsed
+            return ctx, None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
             for ctx, result in pool.map(worker, ctxs):
@@ -315,12 +327,22 @@ def _content_hash(ctx: FunctionContext) -> str:
 
 
 def _call_provider(provider, prompt: str) -> str | None:
-    """Invoke ApiProvider's underlying Anthropic client with the combined prompt.
+    """Dispatch the combined prompt to the right backend.
 
-    ApiProvider.generate() only handles the legacy one-sentence intent path
-    and returns a string, not structured JSON. We reuse its client + model
-    fields and issue a raw message call here.
+    The stock IntentProvider.generate() only handles the legacy
+    one-sentence intent path — for impact we need full structured JSON, so
+    we bypass it and issue the call directly using the provider's fields.
     """
+    from winkers.intent.provider import ApiProvider, OllamaProvider
+
+    if isinstance(provider, ApiProvider):
+        return _call_api_provider(provider, prompt)
+    if isinstance(provider, OllamaProvider):
+        return _call_ollama_provider(provider, prompt)
+    return None
+
+
+def _call_api_provider(provider, prompt: str) -> str | None:
     try:
         resp = provider._client.messages.create(  # noqa: SLF001 — shared client
             model=provider.model,
@@ -330,7 +352,40 @@ def _call_provider(provider, prompt: str) -> str | None:
         text = resp.content[0].text if resp.content else ""
         return text.strip() if text else None
     except Exception as e:
-        log.debug("impact LLM call failed: %s", e)
+        log.debug("api impact LLM call failed: %s", e)
+        return None
+
+
+def _call_ollama_provider(provider, prompt: str) -> str | None:
+    """Hit Ollama /api/generate with format=json to force structured output.
+
+    format=json is a hard constraint — Ollama will keep generating until it
+    closes all braces. Small local models still occasionally produce
+    under-specified fields, which is why the batch worker retries the
+    whole call a few times.
+    """
+    import httpx
+
+    try:
+        resp = httpx.post(
+            f"{provider.url}/api/generate",
+            json={
+                "model": provider.model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {
+                    "temperature": provider.temperature,
+                    "num_predict": 2000,
+                },
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        text = resp.json().get("response", "").strip()
+        return text if text else None
+    except Exception as e:
+        log.debug("ollama impact LLM call failed: %s", e)
         return None
 
 
