@@ -106,7 +106,7 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
       Default: uses Claude API (Haiku) if ANTHROPIC_API_KEY is set.
       --ollama gemma3:4b   Use local Ollama instead (must be installed).
       --no-llm             Skip intent generation entirely.
-      Intents are only generated during init, not during after_create,
+      Intents are only generated during init, not during impact_check,
       unless you explicitly set provider in .winkers/config.toml.
 
     \b
@@ -918,7 +918,7 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
     else:
         click.echo("  [ok] Tool permissions already set.")
 
-    # --- Interactive hooks (before_create, duplicate gate, after_create, session audit) ---
+    # --- Interactive hooks (before_create, duplicate gate, impact_check) ---
     changed = _install_interactive_hooks(hooks, hook_bin, root) or changed
 
     if changed:
@@ -980,17 +980,26 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
             "command": f"{hook_bin} hook post-write {root_posix}",
             "timeout": 5,
             "matcher": "Write|Edit|MultiEdit",
-            "label": "post-write auto-update",
-        },
-        {
-            "event": "Stop",
-            "marker": "session-audit",
-            "command": f"{hook_bin} hook session-audit {root_posix}",
-            "timeout": 10,
-            "matcher": "",
-            "label": "session audit gate",
+            "label": "post-write impact check",
         },
     ]
+
+    # 0.8.1: session_done muted — remove legacy Stop/session-audit hook if present.
+    stop_hooks = hooks.get("Stop", [])
+    filtered_stop: list = []
+    for entry in stop_hooks:
+        kept = [h for h in entry.get("hooks", []) if "session-audit" not in h.get("command", "")]
+        if kept:
+            entry["hooks"] = kept
+            filtered_stop.append(entry)
+        elif entry.get("hooks"):
+            changed = True
+            click.echo("  [ok] Stop session-audit hook removed (session_done muted in 0.8.1).")
+    if "Stop" in hooks:
+        if filtered_stop:
+            hooks["Stop"] = filtered_stop
+        else:
+            del hooks["Stop"]
 
     for hdef in hook_defs:
         event_hooks = hooks.setdefault(hdef["event"], [])
@@ -2121,7 +2130,7 @@ def hook_pre_write(path: str):
 @hook.command("post-write")
 @click.argument("path", default=".", type=click.Path(exists=True))
 def hook_post_write(path: str):
-    """PostToolUse hook: auto after_create on file writes."""
+    """PostToolUse hook: impact check on file writes (graph update + impact + coherence)."""
     from winkers.hooks.post_write import run
     run(Path(path).resolve())
 
@@ -2129,7 +2138,7 @@ def hook_post_write(path: str):
 @hook.command("session-audit")
 @click.argument("path", default=".", type=click.Path(exists=True))
 def hook_session_audit(path: str):
-    """Stop hook: session audit gate."""
+    """Stop hook: session audit gate (muted in 0.8.1 — left for legacy settings.json)."""
     from winkers.hooks.session_audit import run
     run(Path(path).resolve())
 

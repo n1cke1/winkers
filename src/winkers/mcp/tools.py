@@ -138,11 +138,13 @@ def register_tools(
                 },
             ),
             Tool(
-                name="after_create",
+                name="impact_check",
                 description=(
-                    "Call after writing or modifying code. Updates the project graph"
-                    " and checks for issues. Returns impact analysis for changed"
+                    "Call after writing, editing, or deleting code. Updates the project"
+                    " graph and checks for issues. Returns impact analysis for changed"
                     " functions, coherence checklist, and session status summary."
+                    " In Claude Code this runs automatically via the post-write hook;"
+                    " call explicitly for re-check or files you didn't edit directly."
                 ),
                 inputSchema={
                     "type": "object",
@@ -158,9 +160,9 @@ def register_tools(
             Tool(
                 name="session_done",
                 description=(
-                    "Call when your task is complete. Returns PASS or FAIL with"
-                    " specific action items. DO NOT consider your task finished"
-                    " until this returns PASS."
+                    "Optional final audit when your task is complete. Returns PASS or"
+                    " FAIL across all writes in the session. Useful for cross-file"
+                    " coherence review after a series of edits."
                 ),
                 inputSchema={
                     "type": "object",
@@ -192,8 +194,8 @@ def register_tools(
             result = _tool_rule_read(arguments, root)
         elif name == "before_create":
             result = _tool_before_create(graph, arguments, root)
-        elif name == "after_create":
-            result = _tool_after_create(graph, arguments, root, get_graph)
+        elif name == "impact_check":
+            result = _tool_impact_check(graph, arguments, root, get_graph)
         elif name == "session_done":
             result = _tool_session_done(graph, root)
         else:
@@ -416,11 +418,16 @@ def _section_rules_list(root: Path) -> dict:
 
     by_category: dict[str, list[dict]] = {}
     for r in rules_file.rules:
-        by_category.setdefault(r.category, []).append({
+        entry: dict = {
             "id": r.id,
             "title": r.title,
-            "related": r.related,
-        })
+        }
+        snippet = _one_liner(r.wrong_approach)
+        if snippet:
+            entry["wrong_approach"] = snippet
+        if r.related:
+            entry["related"] = r.related
+        by_category.setdefault(r.category, []).append(entry)
 
     return {
         "total": len(rules_file.rules),
@@ -428,6 +435,16 @@ def _section_rules_list(root: Path) -> dict:
             cat: rules for cat, rules in sorted(by_category.items())
         },
     }
+
+
+def _one_liner(text: str, limit: int = 140) -> str:
+    """Collapse text to a single-line snippet truncated to `limit` chars."""
+    if not text:
+        return ""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
 
 
 def _section_hotspots(graph: Graph, min_callers: int) -> dict:
@@ -547,6 +564,7 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
         file_node = graph.files.get(file_path)
         if not file_node:
             return {"error": f"File not found: {file_path}"}
+        incoming = graph.imported_by_file(file_path)
         file_result: dict[str, Any] = {
             "file": file_path,
             "language": file_node.language,
@@ -562,6 +580,9 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
                 for fid in file_node.function_ids
                 if fid in graph.functions
             ],
+            "sibling_imports": graph.sibling_imports_count(file_path),
+            "imported_by": sorted({e.source_file for e in incoming}),
+            "migration_cost": len(incoming),
         }
         if root:
             from winkers.protect import load_startup_chain
@@ -644,7 +665,7 @@ def _tool_rule_read(args: dict, root: Path) -> dict:
     }
 
 
-def _tool_after_create(
+def _tool_impact_check(
     graph: Graph, args: dict, root: Path,
     get_graph: Callable[[], Graph | None],
 ) -> dict:
@@ -743,7 +764,7 @@ def _tool_after_create(
         result["session"]["pending"] = [
             w.detail for w in session.pending_warnings()[:5]
         ]
-        result["session"]["hint"] = "Call session_done() when complete."
+        result["session"]["hint"] = "Call session_done() for an optional final audit."
 
     return result
 
@@ -891,7 +912,7 @@ def _generate_incremental_intents(
     """Generate intents for new/modified functions (non-blocking).
 
     Only runs if intent provider was explicitly configured (not "auto").
-    This prevents surprise API calls during after_create.
+    This prevents surprise API calls during impact_check.
     """
     try:
         from winkers.intent.provider import NoneProvider, auto_detect, load_config
@@ -922,7 +943,7 @@ def _generate_incremental_intents(
                 if intent:
                     fn.intent = intent
     except Exception:
-        pass  # Non-blocking: don't fail after_create on intent errors
+        pass  # Non-blocking: don't fail impact_check on intent errors
 
 
 def _broken_caller_details(fn_id: str, graph: Graph) -> list[dict]:
@@ -990,6 +1011,7 @@ def _check_complexity_delta(graph: Graph, session) -> dict | None:
 
 def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     from winkers.search import format_before_create_response, search_functions
+    from winkers.target_resolution import categorize_intent, resolve_targets
 
     intent = args.get("intent", "")
     zone = args.get("zone", "")
@@ -997,8 +1019,180 @@ def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     if not intent:
         return {"error": "Provide 'intent' — what you want to create."}
 
+    category = categorize_intent(intent)
+    targets = resolve_targets(intent, graph)
+
+    if category == "restructure" and not targets.is_empty():
+        return _before_create_restructure(graph, intent, targets)
+
+    if category == "modify":
+        # Either explicit targets, or FTS5 fallback to pick affected fns.
+        if targets.functions or targets.paths:
+            return _before_create_modify(graph, intent, targets)
+        fallback_matches = search_functions(graph, intent, zone=zone)
+        if fallback_matches:
+            derived = _targets_from_matches(fallback_matches)
+            return _before_create_modify(graph, intent, derived)
+        # Nothing matched — fall through to unknown.
+        return _before_create_unknown(graph, intent, root)
+
+    if category in ("create", "unknown"):
+        if category == "unknown" and targets.is_empty():
+            # No keywords, no named targets — give architectural context.
+            fallback_matches = search_functions(graph, intent, zone=zone)
+            if not fallback_matches:
+                return _before_create_unknown(graph, intent, root)
+            response = format_before_create_response(
+                graph, intent, fallback_matches, zone=zone, root=root,
+            )
+            response["intent_type"] = "create"
+            return response
+
+    # Default: create / fallback.
     matches = search_functions(graph, intent, zone=zone)
-    return format_before_create_response(graph, intent, matches, zone=zone, root=root)
+    response = format_before_create_response(graph, intent, matches, zone=zone, root=root)
+    response["intent_type"] = "create"
+    return response
+
+
+def _before_create_restructure(graph: Graph, intent: str, targets) -> dict:
+    resolved = sorted(set(targets.paths))
+    resolved_set = set(resolved)
+
+    cross_imports = 0
+    external_importers: set[str] = set()
+    migration_cost = 0
+
+    for path in resolved:
+        for edge in graph.imports_from_file(path):
+            if edge.target_file in resolved_set and edge.target_file != path:
+                cross_imports += 1
+        for edge in graph.imported_by_file(path):
+            if edge.source_file in resolved_set:
+                continue
+            external_importers.add(edge.source_file)
+            migration_cost += 1
+
+    locked_fns = 0
+    for path in resolved:
+        fnode = graph.files.get(path)
+        if not fnode:
+            continue
+        for fid in fnode.function_ids:
+            if graph.is_locked(fid):
+                locked_fns += 1
+
+    if cross_imports == 0 and migration_cost > 0:
+        safe_alternative = (
+            "re-export facade: create a new module that re-exports from originals. "
+            "Zero existing files changed, zero callers to update."
+        )
+    elif cross_imports == 0 and migration_cost == 0:
+        safe_alternative = (
+            "files have no cross-imports and no external callers — merging is safe, "
+            "but gives no cohesion benefit either."
+        )
+    else:
+        safe_alternative = (
+            f"merge with caller updates: {migration_cost} import statements across "
+            f"{len(external_importers)} files must be rewritten."
+        )
+
+    return {
+        "intent_type": "restructure",
+        "intent": intent,
+        "resolved_targets": resolved,
+        "cross_imports": cross_imports,
+        "imported_by": sorted(external_importers),
+        "migration_cost": migration_cost,
+        "locked_fns": locked_fns,
+        "safe_alternative": safe_alternative,
+    }
+
+
+def _before_create_modify(graph: Graph, intent: str, targets) -> dict:
+    fn_ids: list[str] = list(targets.functions)
+    for path in targets.paths:
+        fnode = graph.files.get(path)
+        if not fnode:
+            continue
+        for fid in fnode.function_ids:
+            if fid not in fn_ids:
+                fn_ids.append(fid)
+
+    affected: list[dict] = []
+    for fid in fn_ids:
+        fn = graph.functions.get(fid)
+        if fn is None:
+            continue
+        caller_edges = graph.callers(fid)
+        test_count = sum(
+            1 for e in caller_edges
+            if "test" in e.call_site.file.lower()
+        )
+        sample = [
+            {
+                "file": e.call_site.file,
+                "line": e.call_site.line,
+                "fn": e.source_fn,
+                "expression": e.call_site.expression,
+            }
+            for e in caller_edges[:8]
+        ]
+        affected.append({
+            "name": fn.name,
+            "file": fn.file,
+            "locked": bool(caller_edges),
+            "callers_count": len(caller_edges),
+            "test_callers_count": test_count,
+            "callers": sample,
+        })
+
+    return {
+        "intent_type": "modify",
+        "intent": intent,
+        "resolved_targets": [graph.functions[f].id for f in fn_ids if f in graph.functions],
+        "affected_fns": affected,
+    }
+
+
+def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
+    hotspots = _section_hotspots(graph, min_callers=3)
+    top_hotspots = hotspots.get("hotspots", [])[:5]
+
+    zone_intents: dict[str, dict] = {}
+    try:
+        semantic = _load_semantic(root)
+        if semantic is not None:
+            for zname, zintent in semantic.zone_intents.items():
+                zone_intents[zname] = {
+                    "why": zintent.why,
+                    "wrong_approach": zintent.wrong_approach,
+                }
+    except Exception:
+        pass
+
+    return {
+        "intent_type": "unknown",
+        "intent": intent,
+        "note": (
+            "Could not resolve specific files or functions from the intent. "
+            "Returning architectural context to avoid an empty answer."
+        ),
+        "hotspots": top_hotspots,
+        "zone_intents": zone_intents,
+    }
+
+
+def _targets_from_matches(matches):
+    """Convert search Match list into ResolvedTargets (for modify fallback)."""
+    from winkers.target_resolution import ResolvedTargets
+
+    targets = ResolvedTargets()
+    for m in matches:
+        if m.fn.id not in targets.functions:
+            targets.functions.append(m.fn.id)
+    return targets
 
 
 # ---------------------------------------------------------------------------

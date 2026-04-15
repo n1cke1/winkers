@@ -90,7 +90,14 @@
       "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py tests/test_recorder.py tests/test_improve.py -q --tb=short)",
       "Bash(.venv/Scripts/python -m pytest tests/test_intent.py tests/test_hooks.py -q --tb=short)",
       "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py tests/test_intent.py tests/test_session_done.py tests/test_tools.py tests/test_ui_map.py tests/test_search.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_ui_map.py tests/test_hooks.py tests/test_tools.py tests/test_intent.py -q --tb=short)"
+      "Bash(.venv/Scripts/python -m pytest tests/test_ui_map.py tests/test_hooks.py tests/test_tools.py tests/test_intent.py -q --tb=short)",
+      "Bash(find /c/Development/Winkers/src -name \"*.py\" -exec grep -l \"after_create\" {} \\\\;)",
+      "Bash(xargs grep:*)",
+      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py tests/test_session_state.py tests/test_session_done.py tests/test_models.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py -v)",
+      "Bash(.venv/Scripts/pytest tests/)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -v)"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP"

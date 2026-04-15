@@ -1,4 +1,8 @@
-"""PostToolUse(Write|Edit) hook — auto after_create on file writes."""
+"""PostToolUse(Write|Edit) hook — impact check on file writes.
+
+Runs graph update + impact analysis + coherence check automatically. Equivalent
+to the `impact_check` MCP tool but triggered by Claude Code hooks protocol.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from pathlib import Path
 
 
 def run(root: Path) -> None:
-    """Read hook JSON from stdin, run after_create logic, output context."""
+    """Read hook JSON from stdin, run impact_check logic, output context."""
     try:
         hook_data = json.loads(sys.stdin.read())
     except Exception:
@@ -124,7 +128,7 @@ def run(root: Path) -> None:
     if pending:
         lines.append(
             f"  SESSION: {len(pending)} warning(s) pending."
-            " Call session_done() when complete."
+            " Call session_done() for an optional final audit."
         )
 
     if len(lines) > 1:

@@ -1,99 +1,54 @@
 ---
 name: skill
 description: >
-  Architectural context for code changes. Queries a function-level
-  dependency graph to show locked functions (have callers), free functions,
-  zones, conventions, and startup chain. Use before modifying code.
+  Architectural context for code changes. Function-level dependency graph,
+  locked/free functions, zones, rules, module coupling. Use before modifying code.
 ---
 
 # Winkers — Architectural Context
 
 ## When to use
 
-Before writing or modifying code, get architectural context to understand
-what your changes will affect. Skip for trivial edits (typos, comments).
+Before non-trivial writes or edits. Skip for typos, comments, one-line tweaks.
 
 ## Workflow
 
-### 1. Understand structure
-```
-orient with include: ["map", "conventions"]
-```
-Zones, hotspots, data flow, zone intents, domain context. Call first.
+1. `orient include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
+2. `before_create intent: "<goal>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions, or safe alternatives. **Call before writing any code.**
+3. Write / edit code.
+4. `impact_check file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
-### 2. Get constraints for your files
-```
-scope with file: "<path>"
-```
-For each file you'll modify: locked/free functions, callers, related rules,
-startup chain warnings.
+## On demand
 
-### 3. Check coding rules
-```
-orient with include: ["rules_list"]
-```
-Available categories. Then:
-```
-rule_read with category: "<name>"
-```
-Detailed rules with wrong_approach for that category.
-
-### 4. Before creating new code
-```
-before_create with intent: "<what you want to create>"
-```
-Search existing functions. Reuse before writing new code.
-
-### 5. After writing code
-```
-after_create with file_path: "<path>"
-```
-Updates graph, checks impact, coherence. Then:
-```
-scope with function: "<name>"
-```
-Verify callers are not broken. Check:
-- `safe_changes`: modify body, add optional params with defaults
-- `breaking_changes`: change param types/order, remove params, change return type
-
-### 6. When task is complete
-```
-session_done (no args)
-```
-PASS/FAIL audit. Do not finish until PASS.
+| Tool | When |
+|------|------|
+| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `convention_read` with `target` | zone intent / data_flow / checklist |
+| `session_done` | optional cross-file audit |
 
 ## Key concepts
 
-- **locked**: function has callers depending on its signature. Do NOT change
-  parameter types, parameter order, or return type without updating all callers.
-- **free**: no callers anywhere in the project. Modify freely.
-- **startup_chain**: file is in the startup import chain — changes can
-  prevent the application from starting.
-- **hotspots**: top functions by caller count — highest-risk to modify.
+- **locked** — has callers. Don't change param types/order/return without updating all callers.
+- **free** — no callers; modify freely.
+- **startup_chain** — changing a startup-chain file can prevent app start.
+- **hotspots** — functions with many callers; high-risk changes.
 
 ## Example
 
-**Task**: "add batch price update for wholesale orders"
+Task: add batch price update for wholesale orders.
 
 ```
-orient(include: ["map","conventions"])
-→ zones: modules (pricing.py, inventory.py), api (prices.py)
-→ hotspot: modules/pricing.py::calculate_price (7 callers)
-→ data_flow: User -> API -> pricing -> DB
+orient(include: ["map","conventions","rules_list"])
+  → zones: modules, api | hotspot: calculate_price (7 callers)
+  → rule #4 "Decimal precision": "Converting Decimal to float mid-pipeline..."
 
-scope(file: "modules/pricing.py")
-→ calculate_price LOCKED (7 callers), callers expect (item_id, qty)->float
-→ apply_discount LOCKED (1 caller)
-→ related_rules: [numeric] "Use Decimal for money calculations"
+before_create(intent: "batch price calculation")
+  → intent_type: create, no match, zone_conventions returned
+  → resolved_targets: modules/pricing.py
 
-before_create(intent: "batch price calculation") → no match, create new
+[write batch_calculate_prices calling calculate_price in a loop]
 
-Decision: create batch_calculate_prices(items: list) that calls
-calculate_price in a loop. Does not touch calculate_price signature.
-
-[write code]
-
-after_create(file_path: "modules/pricing.py") → 1 function added, ok
-scope(function: "calculate_price") → callers unchanged [ok]
-session_done() → PASS
+(post-write hook) impact_check: 1 function added, no broken callers
 ```

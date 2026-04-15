@@ -1,67 +1,55 @@
 # Architectural Context — Winkers
 
 This project uses Winkers MCP server for function-level dependency tracking.
-The server starts automatically via `.mcp.json`. Seven tools available:
+The server starts automatically via `.mcp.json`. Seven tools available.
 
-## Workflow for code changes
+## Workflow
 
-Before modifying any code:
+1. **`orient`** with `include: ["map", "conventions", "rules_list"]` — zones,
+   hotspots, data flow, zone intents, and coding rules with `title` +
+   `wrong_approach` one-liner per rule. **First call.**
 
-1. **`orient`** with `include: ["map", "conventions"]` — project structure, zones, hotspots,
-   data flow, zone intents, domain context. **Call first.**
+2. **`before_create`** with `intent: "<what you want>"` — classifies intent,
+   resolves targets from graph, returns matches, migration cost, affected
+   callers with expressions, or safe alternatives. **Call before writing any
+   code.**
 
-2. **`scope`** with `file: "<path>"` — for each file you'll touch:
-   locked/free functions, callers, related rules, startup chain warnings.
+3. Write / edit code.
 
-3. **`orient`** with `include: ["rules_list"]` — available coding rule categories.
-   Then **`rule_read`** with `category: "<name>"` for details with wrong_approach.
+4. **`impact_check`** with `file_path: "<path>"` — graph update + duplicate
+   detection + broken import check. Auto via hook in Claude Code; call
+   explicitly in other agents after each Write/Edit/Delete.
 
-Before creating new code:
+## On demand
 
-4. **`before_create`** with `intent: "<what you want>"` — search existing functions.
-
-After writing code:
-
-5. **`after_create`** with `file_path: "<path>"` — updates graph, checks impact.
-
-6. **`scope`** with `function: "<name>"` — verify callers are not broken by your change.
-
-When task is complete:
-
-7. **`session_done`** (no args) — PASS/FAIL audit. Do not finish until PASS.
+| Tool | When |
+|------|------|
+| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `convention_read` with `target` | zone intent / data_flow / checklist |
+| `session_done` | optional cross-file audit |
 
 ## Key concepts
 
 | Term | Meaning |
 |------|---------|
-| **locked** | Function has callers depending on its signature |
-| **free** | No callers — safe to modify freely |
-| **startup_chain** | File is in the startup import chain — changes can prevent app start |
-
-## Other tools
-
-- `orient` with `include: ["functions_graph"]` — full indexed function list with caller counts.
-- `orient` with `include: ["hotspots"]` — functions with many callers; high-impact to change.
-- `orient` with `include: ["routes"]` — HTTP endpoints: method, path, handler, callees.
-- `orient` with `include: ["ui_map"]` — route-to-template links with UI elements.
-- `convention_read` with `target: "<zone>"` — zone intent details, data_flow, checklist.
+| **locked** | Function has callers; changing params/return breaks them |
+| **free** | No callers — modify freely |
+| **startup_chain** | File is in the startup import chain; changes can prevent app start |
 
 ## Example
 
 ```
-User: add batch discount feature
+orient(include: ["map","conventions","rules_list"])
+  → zones: modules, api | hotspot: calculate_price (7 callers)
+  → rule #4 "Decimal precision": "Converting Decimal to float mid-pipeline..."
 
-Agent:
-  orient(include: ["map","conventions"]) → zones: modules, api. hotspot: calculate_price (7 callers)
-  scope(file: "modules/pricing.py") → calculate_price LOCKED, callers expect (item_id, qty)->float
-  before_create(intent: "batch discount calculation") → no exact match, conventions shown
+before_create(intent: "batch price calculation")
+  → intent_type: create, no match → zone_conventions
+  → resolved_targets: modules/pricing.py
 
-  Decision: new batch_calculate_prices() calls calculate_price in loop.
-  Does not change calculate_price signature.
+[write batch_calculate_prices calling calculate_price in a loop]
 
-  [writes code]
-
-  after_create(file_path: "modules/pricing.py") → 1 function added, no broken callers
-  scope(function: "calculate_price") → callers unchanged [ok]
-  session_done() → PASS
+impact_check(file_path: "modules/pricing.py") → 1 function added, no broken callers
 ```

@@ -1,38 +1,26 @@
-<!-- winkers-snippet-version: 0.8.0 -->
+<!-- winkers-snippet-version: 0.8.1 -->
 ## Architectural context (Winkers)
 
-This project uses [Winkers](https://github.com/n1cke1/winkers) for
-architectural context: dependency graph, semantic zones, coding conventions,
-data flow, and UI mapping. MCP server `winkers` is connected.
+[Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
 
-### Before modifying code
+### Workflow
 
-1. `orient` with `include: ["map", "conventions"]` — project structure, zones, hotspots, data flow, zone intents. **Call first.**
-2. `scope` with `file: "<path>"` — locked/free functions, callers, related rules for that file.
-3. `orient` with `include: ["rules_list"]` — available coding rule categories; then `rule_read` with `category: "<name>"` for details.
+1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
+2. `before_create` with `intent: "<what you want to do>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions, or safe alternatives. **Call before writing any code.**
+3. Write / edit code.
+4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
-### Before creating new code
+### On demand
 
-- `before_create` with `intent: "<what you want to create>"` — searches for existing implementations. **Call before writing any new function, class, or module.**
-
-### After modifying code
-
-- `after_create` with `file_path: "<path>"` — updates graph, checks impact, coherence, duplicates. **Call after every file write.**
-
-### When task is complete
-
-- `session_done` (no args) — session audit. Returns PASS or FAIL. **Do not consider your task finished until this returns PASS.**
+| Tool | When |
+|------|------|
+| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `convention_read` with `target` | zone intent / data_flow / checklist |
+| `session_done` | optional cross-file audit |
 
 ### Key concepts
 
-- **locked** = function has callers depending on its signature. Do not change
-  param types, order, or return type without updating all callers.
-- **free** = no callers. Modify freely.
-
-### Other tools
-
-- `orient` with `include: ["functions_graph"]` — full indexed function list with caller counts.
-- `orient` with `include: ["routes"]` — HTTP endpoints (Flask/FastAPI): method, path, handler, callees.
-- `orient` with `include: ["ui_map"]` — Flask route→template links with UI elements (panels, tables, forms, headings).
-- `orient` with `include: ["hotspots"]` — functions with many callers; high-impact changes.
-- `convention_read` with `target: "<zone>"` — zone intent details (e.g. "app.py", "data_flow", "checklist").
+- **locked** — has callers; don't change signature without updating them.
+- **free** — no callers; modify freely.
