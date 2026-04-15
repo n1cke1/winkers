@@ -1253,6 +1253,16 @@ def _before_create_change(
     file_paths = sorted(set(targets.paths))
     explicit_set = set(explicit_fns)
 
+    # Files derived from explicit functions — used only for the `files` block
+    # (import/migration metrics). Not surfaced in resolved_targets (user didn't
+    # name them) and not fed into zone expansion (would inflate `functions`).
+    derived_files = {
+        graph.functions[fid].file
+        for fid in explicit_fns
+        if fid in graph.functions
+    }
+    analysis_paths = sorted(set(file_paths) | derived_files)
+
     response: dict = {
         "intent_type": "change",
         "intent": intent,
@@ -1262,8 +1272,8 @@ def _before_create_change(
         },
     }
 
-    if file_paths:
-        response["files"] = _files_block(graph, file_paths)
+    if analysis_paths:
+        response["files"] = _files_block(graph, analysis_paths)
 
     fn_block = _functions_block(graph, file_paths, explicit_set, root=root)
     if fn_block is not None:
