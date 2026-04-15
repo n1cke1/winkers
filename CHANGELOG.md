@@ -32,9 +32,12 @@
   - `orient(["hotspots"])` entries include `risk_level` and `risk_score`.
 - **Dashboard**: `/api/impact` endpoint exposes the compact per-function risk
   map for the heatmap layer (UI layer ships separately).
-- **Graceful degradation**: without a Claude API key, the impact pass is
-  skipped entirely — the legacy per-function intent generator still runs and
-  tools work as in 0.8.1 before this commit.
+- **Backends**: Claude API is the default when `ANTHROPIC_API_KEY` is set
+  (preferred, reliable structured JSON). Ollama is a supported fallback when
+  `winkers init --ollama MODEL` was used — the impact pass talks to it via
+  `/api/generate` with `format=json`, and the batch worker retries a
+  failed parse up to 3× per function since small local models occasionally
+  produce incomplete JSON. Without any LLM provider the pass is skipped.
 
 ### value_locked — value-domain breaking change detection
 

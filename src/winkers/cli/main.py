@@ -186,20 +186,32 @@ def _run_impact_only(root: Path, force: bool) -> None:
 
 
 def _run_impact_generation(root: Path, graph, force: bool) -> bool:
-    """Run the combined intent+impact pass. Returns True if it actually ran."""
+    """Run the combined intent+impact pass. Returns True if it actually ran.
+
+    Works with both Claude API (preferred) and Ollama (via format=json).
+    Returns False only when no LLM provider is configured at all, in which
+    case the caller falls back to the legacy single-intent generator.
+    """
     _load_dotenv(root)
 
     from winkers.impact import ImpactGenerator, ImpactStore
-    from winkers.intent.provider import ApiProvider, auto_detect, load_config
+    from winkers.intent.provider import (
+        ApiProvider,
+        NoneProvider,
+        OllamaProvider,
+        auto_detect,
+        load_config,
+    )
 
     intent_cfg = load_config(root)
     provider = auto_detect(intent_cfg)
-    if not isinstance(provider, ApiProvider):
-        # Combined analysis needs structured JSON — only API provider supports it.
-        # Leave impact.json untouched; caller will fall back to legacy intent gen.
+    if isinstance(provider, NoneProvider):
+        return False
+    if not isinstance(provider, (ApiProvider, OllamaProvider)):
         return False
 
-    click.echo("  Running impact analysis (LLM) ...")
+    label = "Claude API" if isinstance(provider, ApiProvider) else f"Ollama ({provider.model})"
+    click.echo(f"  Running impact analysis ({label}) ...")
     impact_store = ImpactStore(root)
     impact_file = impact_store.load()
 
