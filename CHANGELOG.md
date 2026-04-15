@@ -1,13 +1,30 @@
 # Changelog
 
-## 0.8.1 (unreleased)
+## 0.8.1
 
-### Fixes
+### Control points refinement (graph-mcp-bench findings)
+
+- **`scope(file=)` module coupling** — response now includes `sibling_imports`, `imported_by`, and `migration_cost`. Lets an agent see the actual cost of moving or merging files instead of just "all locked".
+- **`before_create` intent categorization** — keyword-based dispatch (create / restructure / modify / unknown) + regex target resolution from the graph's name dictionary. No API calls.
+  - `restructure` intents (move / merge / consolidate / split) return `resolved_targets`, `cross_imports`, `imported_by`, `migration_cost`, `locked_fns`, and a `safe_alternative` recommendation.
+  - `modify` intents (change / refactor / simplify / rename) return `affected_fns` with callers + call-site expressions.
+  - unresolved intents return an orient-lite payload (top hotspots + zone intents) instead of "No existing implementations found".
+- **`after_create` renamed to `impact_check`** — the old name described *when* to call, not *what* it does. The tool is invoked after writes, edits, *or* deletes. Claude Code users keep the automatic post-write hook; other agents call the MCP tool explicitly.
+- **`session_done` muted** — no longer gated by a Stop hook and no longer blocks task completion. Remains available as an optional final audit. Per-file `impact_check` (via hook or tool) now carries the main coherence signal.
+- **`orient(["rules_list"])` wrong_approach snippet** — each rule entry now includes a one-line `wrong_approach` excerpt (≤140 chars, whitespace-collapsed) next to `id` + `title`. Lets an agent see the precision / anti-pattern signal without a follow-up `rule_read` call.
+
+### Migration notes
+
+- MCP tool `after_create` is gone. Clients that call it by name will see "Unknown tool" — run `winkers init` in each project to refresh CLAUDE.md / skill / hook registrations.
+- `SessionState.after_create_calls` field renamed to `impact_check_calls`. `session.json` is ephemeral (gitignored), no migration needed.
+- `winkers init` removes any legacy Stop / session-audit hook from `.claude/settings.json`.
+
+### Fixes (previously unreleased under 0.8.1)
 
 - **Hook path auto-update** — `winkers init` now updates stale hook paths (e.g. Linux→Windows) instead of skipping or duplicating.
 - **Autocommit marker mismatch** — hook check looked for "auto-commit" but command was "autocommit"; caused duplicate hooks on every init.
 - **Intent provider defaults** — `auto` mode now uses Claude API (Haiku) if key available; Ollama only when explicitly set via `--ollama` or config.toml. Prevents slow Ollama detection.
-- **No surprise intents in after_create** — incremental intent generation only runs if provider was explicitly configured, not on "auto"/"none".
+- **No surprise intents in impact_check** — incremental intent generation only runs if provider was explicitly configured, not on "auto"/"none".
 - **ui_map expanded** — buttons, inputs, select, textarea, sub-tabs (data-*sub*), span indicators, extended panel regex (toolbar, strip, bar, overlay, toast, loading).
 
 ## 0.8.0

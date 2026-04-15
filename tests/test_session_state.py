@@ -16,7 +16,7 @@ class TestSessionState:
         )
         state.add_write(event)
         assert len(state.writes) == 1
-        assert state.after_create_calls == 1
+        assert state.impact_check_calls == 1
 
     def test_add_warning(self):
         state = SessionState(started_at="2026-01-01T00:00:00Z")

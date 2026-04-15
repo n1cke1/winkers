@@ -90,6 +90,27 @@ class Graph(BaseModel):
         fnode = self.files.get(path)
         return fnode.zone if fnode and fnode.zone else "unknown"
 
+    def imports_from_file(self, path: str) -> list["ImportEdge"]:
+        """Edges where this file is the source (files it imports)."""
+        return [e for e in self.import_edges if e.source_file == path]
+
+    def imported_by_file(self, path: str) -> list["ImportEdge"]:
+        """Edges where this file is the target (files importing it)."""
+        return [e for e in self.import_edges if e.target_file == path]
+
+    def sibling_imports_count(self, path: str) -> int:
+        """Number of files in the same zone imported by this file."""
+        zone = self.file_zone(path)
+        if zone == "unknown":
+            return 0
+        count = 0
+        for edge in self.imports_from_file(path):
+            if edge.target_file == path:
+                continue
+            if self.file_zone(edge.target_file) == zone:
+                count += 1
+        return count
+
 
 # ---------------------------------------------------------------------------
 # Session recording models
