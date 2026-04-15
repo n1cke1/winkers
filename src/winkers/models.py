@@ -37,6 +37,7 @@ class FunctionNode(BaseModel):
     ast_hash: str | None = None       # normalized AST hash for clone detection
     intent: str | None = None         # LLM-generated one-sentence description
     secondary_intents: list[str] = []  # inline sub-tasks ("email validation", "password hashing")
+    class_name: str | None = None     # name of enclosing class if this is a method
 
 
 class FileNode(BaseModel):
@@ -86,6 +87,11 @@ class Graph(BaseModel):
     call_edges: list[CallEdge] = []
     import_edges: list[ImportEdge] = []
     value_locked_collections: list[ValueLockedCollection] = []
+    # class_name -> defining file path. Populated for Python for now.
+    class_files: dict[str, str] = {}
+    # class_name -> {attr_name: target_class_name} from `self.X = ClassName(...)`
+    # in __init__. Feeds the heuristic resolver for self.<attr>.method() sites.
+    class_attr_types: dict[str, dict[str, str]] = {}
     meta: dict = {}
 
     def is_locked(self, fn_id: str) -> bool:
