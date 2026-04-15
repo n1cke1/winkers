@@ -447,6 +447,26 @@ def _one_liner(text: str, limit: int = 140) -> str:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
+def _value_locked_for_file(graph: Graph, file_path: str) -> list[dict]:
+    """Compact value_locked_collections block for scope(file=) response."""
+    out: list[dict] = []
+    for c in graph.value_locked_collections:
+        if c.file != file_path:
+            continue
+        entry: dict = {
+            "name": c.name,
+            "kind": c.kind,
+            "values": list(c.values),
+            "total_literal_uses": sum(c.literal_uses.values()),
+        }
+        if c.literal_uses:
+            entry["literal_uses"] = dict(c.literal_uses)
+        if c.files_with_uses:
+            entry["files_with_uses"] = list(c.files_with_uses)
+        out.append(entry)
+    return out
+
+
 def _file_fn_entry(graph: Graph, fid: str) -> dict:
     """One row inside scope(file=) functions[]. Includes intent if present."""
     fn = graph.functions[fid]
@@ -599,6 +619,9 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
             "imported_by": sorted({e.source_file for e in incoming}),
             "migration_cost": len(incoming),
         }
+        value_locked_section = _value_locked_for_file(graph, file_path)
+        if value_locked_section:
+            file_result["value_locked_collections"] = value_locked_section
         if root:
             from winkers.protect import load_startup_chain
             if file_path in load_startup_chain(root):
@@ -697,8 +720,9 @@ def _tool_impact_check(
     # Normalize path separators
     file_path = file_path.replace("\\", "/")
 
-    # 1. Snapshot old signatures before update
+    # 1. Snapshot old signatures + value_locked collections before update
     old_sigs = snapshot_signatures(graph, [file_path])
+    old_value_locked = [c.model_copy(deep=True) for c in graph.value_locked_collections]
 
     # 2. Incremental graph update
     store = GraphStore(root)
@@ -718,6 +742,10 @@ def _tool_impact_check(
     # 4. Impact analysis
     diff = compute_diff(old_sigs, graph, [file_path])
     impact = format_impact(diff)
+
+    # 4b. Value-domain change detection
+    from winkers.value_locked import diff_collections
+    value_changes = diff_collections(old_value_locked, graph.value_locked_collections)
 
     # 5. Coherence check
     coherence = _coherence_check(file_path, root)
@@ -762,6 +790,21 @@ def _tool_impact_check(
             fix_approach=rule.get("fix_approach", "sync"),
         ))
 
+    # Add warnings for value-domain shrinkage
+    for vc in value_changes:
+        if not vc["removed"]:
+            continue
+        session.add_warning(Warning(
+            kind="value_locked",
+            severity="error" if vc["affected_literal_uses"] > 0 else "warning",
+            target=f"{vc['file']}::{vc['name']}",
+            detail=(
+                f"{vc['name']}: removed {vc['removed']!r}; "
+                f"{vc['affected_literal_uses']} caller literal use(s) at risk "
+                f"in {len(vc['files_at_risk'])} file(s)."
+            ),
+        ))
+
     session_store.save(session)
 
     # Build response
@@ -769,6 +812,9 @@ def _tool_impact_check(
 
     if impact:
         result["impact"] = impact
+
+    if value_changes:
+        result["value_changes"] = value_changes
 
     if coherence:
         result["coherence"] = coherence
@@ -1026,6 +1072,13 @@ def _check_complexity_delta(graph: Graph, session) -> dict | None:
 
 _AFFECTED_FNS_LIMIT = 5  # cap for zone-expanded function lists
 
+# Keywords that suggest value-domain shrinking (vs additive change). Matched
+# stem-wise via the same stemmer search.py uses.
+_VALUE_REMOVAL_KEYWORDS = frozenset({
+    "simplify", "reduce", "remove", "delete", "consolidate", "shrink",
+    "drop", "prune", "collapse", "merge",
+})
+
 
 def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
     from winkers.search import format_before_create_response, search_functions
@@ -1107,7 +1160,69 @@ def _before_create_change(
     if fn_block is not None:
         response["functions"] = fn_block
 
+    value_block = _value_changes_block(graph, intent, file_paths, explicit_fns)
+    if value_block:
+        response["value_changes"] = value_block
+
     return response
+
+
+def _value_changes_block(
+    graph: Graph,
+    intent: str,
+    file_paths: list[str],
+    explicit_fns: list[str],
+) -> dict | None:
+    """If intent looks like a value-domain shrink AND it touches a file (or
+    referencing function) with a value_locked collection, surface a warning
+    block per affected collection.
+    """
+    if not graph.value_locked_collections:
+        return None
+
+    # Only fire on shrink-style intents — additive changes don't break callers.
+    import re as _re
+
+    from winkers.search import stem
+    intent_stems = {stem(w.lower()) for w in _re.findall(r"[A-Za-z][A-Za-z0-9]*", intent)}
+    removal_stems = {stem(w) for w in _VALUE_REMOVAL_KEYWORDS}
+    if not (intent_stems & removal_stems):
+        return None
+
+    file_set = set(file_paths)
+    explicit_set = set(explicit_fns)
+
+    block: dict = {}
+    for c in graph.value_locked_collections:
+        # Match if collection's file is targeted, or any explicit fn references it.
+        relevant = (
+            c.file in file_set
+            or any(fid in explicit_set for fid in c.referenced_by_fns)
+        )
+        if not relevant:
+            continue
+        total_uses = sum(c.literal_uses.values())
+        block[c.name] = {
+            "value_locked": True,
+            "file": c.file,
+            "values": list(c.values),
+            "total_literal_uses": total_uses,
+            "files_at_risk": len(c.files_with_uses),
+            "safe_alternative": _value_safe_alternative(total_uses),
+        }
+    return block or None
+
+
+def _value_safe_alternative(total_uses: int) -> str:
+    if total_uses == 0:
+        return (
+            "no caller uses these values as literals — safe to change, but "
+            "verify no string-formatting / dict-key paths read them."
+        )
+    return (
+        f"add new values alongside existing; map old to new via a function. "
+        f"Do not remove values that appear as literals in {total_uses} call sites."
+    )
 
 
 def _files_block(graph: Graph, file_paths: list[str]) -> dict:

@@ -12,6 +12,7 @@
 - `src/winkers/languages/` — language profiles: Python, TypeScript, JavaScript, Java, Go, Rust, C#
 - `src/winkers/mcp/` — MCP server (tools: orient, scope, convention_read, rule_read, before_create, impact_check, session_done) + auto-rebuild on file changes
 - `src/winkers/target_resolution.py` — intent categorization (create / change / unknown) + regex target extraction from graph's name dictionary
+- `src/winkers/value_locked.py` — AST detector for module-level literal collections (set/frozenset, ≤64 values), their consumer functions, and caller literal-arg usage. Powers `value_locked` warnings in scope/before_create/impact_check.
 - `src/winkers/hooks/` — Claude Code hooks: prompt_enrich, pre_write, post_write, session_audit
 - `src/winkers/intent/` — LLM intent generation: provider.py (Ollama/API/None), eval_cli.py
 - `src/winkers/detection/` — duplicates.py (AST hash, name similarity), impact.py (signature diff)

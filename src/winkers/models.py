@@ -61,11 +61,30 @@ class ImportEdge(BaseModel):
     names: list[str]
 
 
+class ValueLockedCollection(BaseModel):
+    """A module-level collection of literal values whose membership is read by
+    code paths and tested with literal arguments at call sites.
+
+    Detected at indexing time. Drives the `value_locked` warning surface in
+    scope / before_create / impact_check — removing a value is a silent
+    breaking change for any caller that passes it as a literal.
+    """
+    name: str                       # "VALID_STATUSES"
+    file: str                       # "app/domain/status.py"
+    line: int
+    kind: str                       # "set", "frozenset", "tuple", "list", "Enum"
+    values: list[str]               # only str/int/float, normalized to str
+    referenced_by_fns: list[str] = []     # fn_ids whose body references this name
+    literal_uses: dict[str, int] = {}     # value → number of caller arg usages
+    files_with_uses: list[str] = []       # files where literal usages live
+
+
 class Graph(BaseModel):
     files: dict[str, FileNode] = {}
     functions: dict[str, FunctionNode] = {}
     call_edges: list[CallEdge] = []
     import_edges: list[ImportEdge] = []
+    value_locked_collections: list[ValueLockedCollection] = []
     meta: dict = {}
 
     def is_locked(self, fn_id: str) -> bool:

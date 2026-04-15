@@ -123,6 +123,9 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     click.echo("Resolving cross-file calls ...")
     CrossFileResolver().resolve(graph, str(root))
 
+    from winkers.value_locked import detect_value_locked
+    detect_value_locked(graph, root)
+
     _collect_git_history(root, graph)
 
     store = GraphStore(root)

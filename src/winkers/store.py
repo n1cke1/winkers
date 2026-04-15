@@ -77,6 +77,10 @@ class GraphStore:
         # Compute AST hashes for new/modified functions
         self._compute_ast_hashes(graph, changed_files)
 
+        # Refresh value_locked collections — needs call_edges in place.
+        from winkers.value_locked import detect_value_locked
+        detect_value_locked(graph, self.root)
+
         return graph
 
     def _compute_ast_hashes(self, graph: Graph, files: list[str]) -> None:
