@@ -25,7 +25,10 @@ def register_tools(
             Tool(
                 name="orient",
                 description=(
-                    "IMPORTANT: Call this FIRST. Pass include as a JSON array of strings."
+                    "IMPORTANT: Call this FIRST."
+                    " Pass `include` as an array of section names,"
+                    " e.g. include=['map','rules_list']."
+                    " Do NOT serialize as a JSON-encoded string."
                     " 'map' = project structure, zones, hotspots, data flow."
                     " 'conventions' = domain context, zone intents, business logic."
                     " 'rules_list' = coding rules grouped by category."
@@ -39,11 +42,15 @@ def register_tools(
                     "type": "object",
                     "properties": {
                         "include": {
-                            "type": "array",
-                            "items": {"type": "string"},
+                            "oneOf": [
+                                {"type": "array", "items": {"type": "string"}},
+                                {"type": "string"},
+                            ],
                             "description": (
-                                "What to include: 'map', 'conventions', 'rules_list',"
-                                " 'functions_graph', 'hotspots', 'routes', 'ui_map'"
+                                "Array of section names, e.g. ['map','rules_list']."
+                                " A single section name string is also accepted."
+                                " Valid names: 'map', 'conventions', 'rules_list',"
+                                " 'functions_graph', 'hotspots', 'routes', 'ui_map'."
                             ),
                         },
                         "zone": {
@@ -256,8 +263,33 @@ def _estimate_tokens(data: Any) -> int:
     return len(json.dumps(data, default=str)) // 4
 
 
+def _coerce_include(value: Any) -> list[str]:
+    """Accept array, JSON-encoded array string, or single section name.
+
+    Claude Sonnet sometimes serialises array arguments as a JSON-encoded
+    string (`'["map","rules_list"]'`). Haiku sometimes sends a single
+    section name string (`'map'`) when the caller means a one-element
+    array. Normalise both to a plain list of names.
+    """
+    import json as _json
+
+    if isinstance(value, list):
+        return [str(s) for s in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = _json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [str(s) for s in parsed]
+            except _json.JSONDecodeError:
+                pass
+        return [stripped] if stripped else []
+    return []
+
+
 def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
-    include = args.get("include", [])
+    include = _coerce_include(args.get("include", []))
     zone = args.get("zone")
     min_callers = args.get("min_callers", 10)
     max_tokens = args.get("max_tokens", MAX_ORIENT_TOKENS)

@@ -431,3 +431,36 @@ def test_orient_respects_priority_order(graph, tmp_path):
     )
     # map should be present (higher priority), functions_graph skipped
     assert "map" in result
+
+
+# ---------------------------------------------------------------------------
+# orient.include coercion — workaround for clients that mis-serialise arrays
+# ---------------------------------------------------------------------------
+
+class TestOrientIncludeCoercion:
+    def test_accepts_json_encoded_array_string(self, graph, tmp_path):
+        """Sonnet sometimes sends include as '[\"map\",\"rules_list\"]'."""
+        result = _tool_orient(
+            graph, {"include": '["map", "hotspots"]'}, tmp_path,
+        )
+        assert "map" in result
+
+    def test_accepts_single_string_as_one_element_array(self, graph, tmp_path):
+        """Haiku sometimes sends a bare string when the spec wants an array."""
+        result = _tool_orient(graph, {"include": "map"}, tmp_path)
+        assert "map" in result
+
+    def test_malformed_json_string_treated_as_section_name(self, graph, tmp_path):
+        """'[map' isn't valid JSON — fall back to treating it as a name
+        (which won't match any section, returning no data rather than crashing)."""
+        result = _tool_orient(graph, {"include": "[map"}, tmp_path)
+        # Doesn't match any real section; response is either empty-ish or has
+        # just the meta fields (no map/hotspots/etc.).
+        assert isinstance(result, dict)
+        assert "map" not in result
+
+    def test_empty_string_empty_list(self, graph, tmp_path):
+        result = _tool_orient(graph, {"include": ""}, tmp_path)
+        assert "map" not in result
+        result2 = _tool_orient(graph, {"include": []}, tmp_path)
+        assert "map" not in result2
