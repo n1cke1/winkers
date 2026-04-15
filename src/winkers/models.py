@@ -36,6 +36,7 @@ class FunctionNode(BaseModel):
     template: str | None = None       # "products/list.html"
     ast_hash: str | None = None       # normalized AST hash for clone detection
     intent: str | None = None         # LLM-generated one-sentence description
+    secondary_intents: list[str] = []  # inline sub-tasks ("email validation", "password hashing")
 
 
 class FileNode(BaseModel):
