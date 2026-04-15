@@ -263,6 +263,9 @@ def score_label(value: float) -> str:
     return "poor"
 
 
+_BAD_SESSION_ENDS = frozenset({"user_killed", "max_turns", "error"})
+
+
 def estimate_score(
     session: SessionRecord, commit: CommitBinding, debt: DebtDelta,
 ) -> float:
@@ -281,9 +284,10 @@ def estimate_score(
     if session.tests_passed is False:
         score -= 0.25
 
-    # User signals
-    if session.session_end == "user_killed":
-        score -= 0.15
+    # Session end signals — any unclean end (user-killed, turn limit, error)
+    # is a strong negative signal: agent did not voluntarily finish the task.
+    if session.session_end in _BAD_SESSION_ENDS:
+        score -= 0.2
     if len(session.user_corrections) > 1:
         score -= 0.15
 
@@ -311,3 +315,64 @@ def estimate_score(
         score += 0.05
 
     return max(0.0, min(1.0, score))
+
+
+def score_breakdown(
+    session: SessionRecord, commit: CommitBinding, debt: DebtDelta,
+) -> dict:
+    """Return the score plus a per-signal report.
+
+    Distinguishes between *negative* signals and *missing* signals — a 0.9
+    score backed by `tests_passed=None` and `impact_check_calls=0` should
+    not look the same as 0.9 backed by real evidence.
+    """
+    signals: dict[str, str | float | int | None] = {}
+
+    # Commit signal
+    if commit.status == "committed":
+        signals["commit"] = "committed"
+    elif commit.status == "reverted":
+        signals["commit"] = "reverted"
+    elif commit.status == "uncommitted":
+        signals["commit"] = "no_commit"
+    else:
+        signals["commit"] = commit.status
+
+    # Test outcome
+    if session.tests_passed is True:
+        signals["tests"] = "passed"
+    elif session.tests_passed is False:
+        signals["tests"] = "failed"
+    else:
+        signals["tests"] = "no_data"
+
+    # Session end
+    signals["session_end"] = session.session_end or "no_data"
+
+    # impact_check / graph snapshot evidence
+    impact_calls = session.winkers_calls.get("impact_check", 0) if session.winkers_calls else 0
+    if impact_calls == 0:
+        # Compute_debt_delta returned only file counts → debt metrics are not
+        # backed by graph diff. Flag it explicitly.
+        signals["impact_check"] = "no_data"
+    else:
+        signals["impact_check"] = impact_calls
+
+    # User corrections
+    signals["user_corrections"] = len(session.user_corrections)
+
+    # Debt evidence
+    if debt.complexity_delta == 0 and debt.import_edges_delta == 0 and impact_calls == 0:
+        signals["debt"] = "no_data"
+    else:
+        signals["debt"] = {
+            "complexity_delta": debt.complexity_delta,
+            "max_function_lines": debt.max_function_lines,
+            "biggest_file_growth": debt.biggest_file_growth,
+            "import_edges_delta": debt.import_edges_delta,
+        }
+
+    return {
+        "score": estimate_score(session, commit, debt),
+        "signals": signals,
+    }
