@@ -1360,21 +1360,8 @@ def _value_changes_block(
             "values": list(c.values),
             "total_literal_uses": total_uses,
             "files_at_risk": len(c.files_with_uses),
-            "safe_alternative": _value_safe_alternative(total_uses),
         }
     return block or None
-
-
-def _value_safe_alternative(total_uses: int) -> str:
-    if total_uses == 0:
-        return (
-            "no caller uses these values as literals — safe to change, but "
-            "verify no string-formatting / dict-key paths read them."
-        )
-    return (
-        f"add new values alongside existing; map old to new via a function. "
-        f"Do not remove values that appear as literals in {total_uses} call sites."
-    )
 
 
 def _files_block(graph: Graph, file_paths: list[str]) -> dict:
@@ -1400,28 +1387,11 @@ def _files_block(graph: Graph, file_paths: list[str]) -> dict:
             if graph.is_locked(fid):
                 locked_fns += 1
 
-    if cross_imports == 0 and migration_cost > 0:
-        safe_alternative = (
-            "re-export facade: create a new module that re-exports from originals. "
-            "Zero existing files changed, zero callers to update."
-        )
-    elif cross_imports == 0 and migration_cost == 0:
-        safe_alternative = (
-            "files have no cross-imports and no external callers — merging is safe, "
-            "but gives no cohesion benefit either."
-        )
-    else:
-        safe_alternative = (
-            f"merge with caller updates: {migration_cost} import statements across "
-            f"{len(external_importers)} files must be rewritten."
-        )
-
     return {
         "cross_imports": cross_imports,
         "imported_by": sorted(external_importers),
         "migration_cost": migration_cost,
         "locked_fns": locked_fns,
-        "safe_alternative": safe_alternative,
     }
 
 

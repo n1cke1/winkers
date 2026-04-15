@@ -193,7 +193,6 @@ def test_before_create_change_files_only(graph, tmp_path):
     assert result["resolved_targets"]["functions"] == []
     assert "files" in result
     assert "migration_cost" in result["files"]
-    assert "safe_alternative" in result["files"]
     # No fn block expected when no fns are explicitly named (zone expansion of
     # locked fns produces a functions block too — both are valid). Allow either.
     if "functions" in result:
@@ -223,7 +222,7 @@ def test_before_create_function_only_derives_files_block(graph, tmp_path):
     """Function-only intent still yields file-level metrics via derived paths.
 
     The user didn't name a file, so resolved_targets.files stays empty — but
-    the `files` block (migration_cost / safe_alternative / imported_by) must
+    the `files` block (migration_cost / imported_by / cross_imports) must
     still appear, derived from the resolved function's file.
     """
     result = _tool_before_create(
@@ -232,7 +231,6 @@ def test_before_create_function_only_derives_files_block(graph, tmp_path):
     assert result["resolved_targets"]["files"] == []
     assert "files" in result
     assert "migration_cost" in result["files"]
-    assert "safe_alternative" in result["files"]
     assert "cross_imports" in result["files"]
     # pricing.py is imported by api/prices.py and modules/inventory.py
     assert "api/prices.py" in result["files"]["imported_by"]

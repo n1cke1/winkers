@@ -99,7 +99,12 @@
       "Bash(.venv/Scripts/pytest tests/)",
       "Bash(.venv/Scripts/pytest tests/test_tools.py -v)",
       "Bash(.venv/Scripts/pytest tests/test_value_locked.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_impact_analysis.py -v)"
+      "Bash(.venv/Scripts/pytest tests/test_impact_analysis.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -x -q)",
+      "Bash(.venv/Scripts/python scripts/spike_self_attr.py \"C:/Development/MCP graph bench/invoicekit\")",
+      "Bash(.venv/Scripts/python scripts/spike_self_attr.py .)",
+      "Bash(.venv/Scripts/pytest tests/test_self_attr_resolver.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_value_locked.py -q)"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP"
