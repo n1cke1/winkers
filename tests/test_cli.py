@@ -115,27 +115,67 @@ def test_schema_version_in_graph(project: Path):
     assert graph.meta.get("schema_version") == "2"
 
 
-def test_semantic_summary_in_claude_md(project: Path):
-    """_install_semantic_summary writes a dynamic block into CLAUDE.md."""
-    from winkers.cli.main import _install_semantic_summary
+def test_winkers_pointer_fresh_install(project: Path):
+    """_install_winkers_pointer appends a static pointer block (no semantic data)."""
+    from winkers.cli.main import _install_winkers_pointer
     from winkers.semantic import SemanticLayer, SemanticStore
 
     claude_md = project / "CLAUDE.md"
     claude_md.write_text("# My project\n", encoding="utf-8")
 
-    layer = SemanticLayer(
+    # semantic.json exists but pointer must NOT copy its content.
+    SemanticStore(project).save(SemanticLayer(
         data_flow="CSV -> parser -> DB",
         domain_context="Carbon accounting for EU ETS.",
-    )
-    SemanticStore(project).save(layer)
-    _install_semantic_summary(project)
+    ))
+    _install_winkers_pointer(project)
 
     content = claude_md.read_text(encoding="utf-8")
-    assert "CSV -> parser -> DB" in content
-    assert "Carbon accounting" in content
-    assert "<!-- winkers-semantic-start -->" in content
+    assert "<!-- winkers-start -->" in content
+    assert "<!-- winkers-end -->" in content
+    assert "orient(" in content
+    # Semantic data from semantic.json must NOT leak into CLAUDE.md.
+    assert "CSV -> parser -> DB" not in content
+    assert "Carbon accounting" not in content
 
-    # Second call updates in place (no duplication)
-    _install_semantic_summary(project)
-    content2 = claude_md.read_text(encoding="utf-8")
-    assert content2.count("winkers-semantic-start") == 1
+
+def test_winkers_pointer_idempotent(project: Path):
+    """Two calls produce exactly one pointer block."""
+    from winkers.cli.main import _install_winkers_pointer
+
+    claude_md = project / "CLAUDE.md"
+    claude_md.write_text("# My project\n", encoding="utf-8")
+
+    _install_winkers_pointer(project)
+    _install_winkers_pointer(project)
+
+    content = claude_md.read_text(encoding="utf-8")
+    assert content.count("<!-- winkers-start -->") == 1
+    assert content.count("<!-- winkers-end -->") == 1
+
+
+def test_winkers_pointer_migrates_old_semantic_block(project: Path):
+    """Legacy `<!-- winkers-semantic-start -->` block is replaced in-place."""
+    from winkers.cli.main import _install_winkers_pointer
+
+    claude_md = project / "CLAUDE.md"
+    claude_md.write_text(
+        "# My project\n\n"
+        "<!-- winkers-semantic-start -->\n"
+        "### Project context (auto-generated)\n\n"
+        "- **Data flow**: CSV -> parser -> DB\n"
+        "- **Domain**: Carbon accounting for EU ETS.\n"
+        "<!-- winkers-semantic-end -->\n",
+        encoding="utf-8",
+    )
+
+    _install_winkers_pointer(project)
+
+    content = claude_md.read_text(encoding="utf-8")
+    # Old markers and content gone.
+    assert "<!-- winkers-semantic-start -->" not in content
+    assert "<!-- winkers-semantic-end -->" not in content
+    assert "CSV -> parser -> DB" not in content
+    # New pointer in place.
+    assert "<!-- winkers-start -->" in content
+    assert "orient(" in content

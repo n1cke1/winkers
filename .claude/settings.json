@@ -104,10 +104,19 @@
       "Bash(.venv/Scripts/python scripts/spike_self_attr.py \"C:/Development/MCP graph bench/invoicekit\")",
       "Bash(.venv/Scripts/python scripts/spike_self_attr.py .)",
       "Bash(.venv/Scripts/pytest tests/test_self_attr_resolver.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_value_locked.py -q)"
+      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_value_locked.py -q)",
+      "Bash(grep -n \"def is_locked\" /c/Development/Winkers/src/winkers/*.py)",
+      "Bash(grep -rn \"before_create\" /c/Development/Winkers/tests/*.py)",
+      "Bash(grep -rn \"def test_\\\\|test.*pattern\\\\|skip.*test\" /c/Development/Winkers/src/winkers/*.py)",
+      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py -x --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_cli.py -x --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py -x --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -x --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py::test_orient_compacts_rules_when_over_budget -x --tb=long)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\NP"
+      "C:\\Users\\NP",
+      "C:\\Users\\NP\\.claude\\plans"
     ]
   },
   "hooks": {
