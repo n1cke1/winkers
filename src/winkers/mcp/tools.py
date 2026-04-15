@@ -395,6 +395,8 @@ def _section_map(graph: Graph, zone_filter: str | None, root: Path) -> dict:
     }
     if semantic and semantic.data_flow:
         result["data_flow"] = semantic.data_flow
+    if semantic and semantic.data_flow_targets:
+        result["data_flow_targets"] = semantic.data_flow_targets
     return result
 
 
@@ -750,7 +752,10 @@ def _tool_convention_read(args: dict, root: Path) -> dict:
 
     # Aspect names
     if target == "data_flow":
-        return {"data_flow": semantic.data_flow or "Not available."}
+        return {
+            "data_flow": semantic.data_flow or "Not available.",
+            "data_flow_targets": semantic.data_flow_targets,
+        }
     if target == "domain_context":
         return {"domain_context": semantic.domain_context or "Not available."}
     if target == "checklist":
@@ -1588,6 +1593,8 @@ def _semantic_context_for_fn(fn: Any, graph: Graph, root: Path | None) -> dict:
         ctx["zone_intent"] = {"why": intent.why, "wrong_approach": intent.wrong_approach}
     if semantic.data_flow:
         ctx["data_flow"] = semantic.data_flow
+    if semantic.data_flow_targets:
+        ctx["data_flow_targets"] = semantic.data_flow_targets
     return ctx
 
 
