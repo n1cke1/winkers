@@ -321,3 +321,65 @@ def test_before_create_change_accepts_root(graph, tmp_path):
         explicit_fns=list(targets.functions), root=tmp_path,
     )
     assert result["intent_type"] == "change"
+
+
+# ---------------------------------------------------------------------------
+# Provider dispatch — Ollama is now a first-class backend for impact
+# ---------------------------------------------------------------------------
+
+class TestProviderDispatch:
+    def test_ollama_provider_is_accepted(self, graph, tmp_path):
+        """_resolve_provider() returns OllamaProvider when config.provider='ollama'."""
+        from winkers.impact.generator import ImpactGenerator
+        from winkers.intent.provider import OllamaProvider
+
+        (tmp_path / ".winkers").mkdir()
+        (tmp_path / ".winkers" / "config.toml").write_text(
+            '[intent]\nprovider = "ollama"\nmodel = "gemma3:4b"\n',
+            encoding="utf-8",
+        )
+        gen = ImpactGenerator(graph, tmp_path)
+        provider = gen._resolve_provider()  # noqa: SLF001
+        assert isinstance(provider, OllamaProvider)
+
+    def test_none_provider_returns_none(self, graph, tmp_path):
+        from winkers.impact.generator import ImpactGenerator
+
+        (tmp_path / ".winkers").mkdir()
+        (tmp_path / ".winkers" / "config.toml").write_text(
+            '[intent]\nprovider = "none"\n', encoding="utf-8",
+        )
+        gen = ImpactGenerator(graph, tmp_path)
+        assert gen._resolve_provider() is None  # noqa: SLF001
+
+    def test_call_ollama_provider_sends_format_json(self, monkeypatch):
+        """Ollama HTTP call must include format=json to force structured output."""
+        from winkers.impact.generator import _call_ollama_provider
+        from winkers.intent.provider import IntentConfig, OllamaProvider
+
+        captured = {}
+
+        class _FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "response": (
+                        '{"primary_intent":"x","risk_level":"low",'
+                        '"risk_score":0.1,"summary":"","secondary_intents":[]}'
+                    )
+                }
+
+        def fake_post(url, json, timeout):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResp()
+
+        monkeypatch.setattr("httpx.post", fake_post)
+        provider = OllamaProvider(IntentConfig(provider="ollama", model="gemma3:4b"))
+        raw = _call_ollama_provider(provider, "some prompt")
+        assert raw is not None
+        assert captured["json"]["format"] == "json"
+        assert captured["json"]["model"] == "gemma3:4b"
+        assert "api/generate" in captured["url"]
