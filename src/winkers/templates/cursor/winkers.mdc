@@ -19,7 +19,7 @@ graph and avoid breaking callers.
 ## Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<goal>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions, or safe alternatives. **Call before writing any code.**
+2. `before_create` with `intent: "<goal>"` — classifies intent, resolves targets from graph, returns matches, migration cost, affected callers with expressions + `risk_level` / `dangerous_operations`, `similar_logic` for duplicated `secondary_intents`, or safe alternatives. **Call before writing any code.**
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
@@ -27,9 +27,9 @@ graph and avoid breaking callers.
 
 | Tool | When |
 |------|------|
-| `scope` with `file` or `function` | drill into coupling or caller expressions |
+| `scope` with `file` or `function` | drill into coupling, caller expressions, pre-computed `impact` (risk / safe+dangerous ops / classified callers / action plan), `similar_logic` (shared `secondary_intents`) |
 | `rule_read` with `category` | full rule text when the one-liner from step 1 isn't enough |
-| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory |
+| `orient` with `functions_graph` / `routes` / `hotspots` | deeper inventory; `hotspots` entries carry `risk_level` when impact.json exists |
 | `convention_read` with `target` | zone intent / data_flow / checklist |
 | `session_done` | optional cross-file audit |
 
@@ -42,3 +42,10 @@ graph and avoid breaking callers.
   read by some function and tested by callers with literal arguments.
   Removing a value silently breaks them — `scope`, `before_create`, and
   `impact_check` surface the warning.
+- **impact / risk_level** = per-function LLM-assessed risk
+  (`low`/`medium`/`high`/`critical`) + `safe_operations` / `dangerous_operations`
+  / classified callers + `action_plan`. Pre-computed at `winkers init` when an
+  LLM provider is set; surfaced in `scope(function=).impact` and `hotspots`.
+- **secondary_intents** = inline sub-task tags (e.g. `"email validation"`).
+  `scope.similar_logic` and `before_create.similar_logic` group functions
+  sharing tags — consider extracting shared logic instead of duplicating.
