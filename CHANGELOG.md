@@ -2,6 +2,26 @@
 
 ## 0.8.1
 
+### `orient.include` — clients that mis-serialise arrays no longer lock agents out
+
+Claude Sonnet occasionally serialises array tool arguments as a JSON-encoded
+string (`'["map","rules_list"]'`) instead of a real array, triggered by the
+literal phrase "JSON array" in the tool description. Strict jsonschema then
+rejected the call and the agent abandoned `orient` after one retry — which
+in turn made every later step in the recommended flow miss its context.
+
+- Description reworded without the "JSON array" trigger; includes an
+  explicit `Do NOT serialize as a JSON-encoded string` hint and a plain
+  Python-style example.
+- Input schema switched to `oneOf: [array<string>, string]` so a stringified
+  array or a single section name both validate.
+- `_tool_orient` now normalises the value: array passes through, JSON-string
+  is `json.loads`-decoded, bare string becomes a one-element array.
+- Same coercion logic protects against the Haiku-style pattern of sending a
+  single section name instead of a one-element array.
+- Audit of the other six tools: no other descriptions contain the "JSON
+  array / JSON object" wording — only `orient` was affected.
+
 ### Pre-computed impact analysis + multi-intent
 
 - **`impact.json`** — new fourth layer alongside graph/semantic/rules. Per-function
