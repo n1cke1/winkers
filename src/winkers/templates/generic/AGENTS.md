@@ -36,6 +36,7 @@ The server starts automatically via `.mcp.json`. Seven tools available.
 |------|---------|
 | **locked** | Function has callers; changing params/return breaks them |
 | **free** | No callers — modify freely |
+| **value_locked** | Module-level literal collection (`{"draft", "sent", ...}`); removing a value silently breaks callers passing it as a literal |
 | **startup_chain** | File is in the startup import chain; changes can prevent app start |
 
 ## Example

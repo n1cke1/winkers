@@ -82,6 +82,10 @@ class GraphBuilder:
             "parse_time_ms": round(elapsed, 1),
         }
         self._build_ui_map(graph, root)
+        # value_locked detection runs after CrossFileResolver in the init
+        # pipeline (needs call_edges with call_site.expression). Builder is
+        # also used standalone in tests — detection is then triggered by
+        # whichever code path needs the data, e.g. via store.refresh_value_locked.
         return graph
 
     # ------------------------------------------------------------------

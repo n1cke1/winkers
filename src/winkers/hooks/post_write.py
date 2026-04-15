@@ -42,21 +42,24 @@ def run(root: Path) -> None:
     from winkers.detection.impact import compute_diff, snapshot_signatures
     from winkers.session.state import SessionStore, Warning, WriteEvent
     from winkers.store import GraphStore
+    from winkers.value_locked import diff_collections
 
     store = GraphStore(root)
     graph = store.load()
     if graph is None:
         sys.exit(0)
 
-    # 1. Snapshot old signatures
+    # 1. Snapshot old signatures + value_locked collections
     old_sigs = snapshot_signatures(graph, [rel_path])
+    old_value_locked = [c.model_copy(deep=True) for c in graph.value_locked_collections]
 
-    # 2. Incremental graph update
+    # 2. Incremental graph update (refreshes value_locked too)
     store.update_files(graph, [rel_path])
     store.save(graph)
 
     # 3. Impact analysis
     diff = compute_diff(old_sigs, graph, [rel_path])
+    value_changes = diff_collections(old_value_locked, graph.value_locked_collections)
 
     # 4. Coherence check
     coherence = _coherence_check(rel_path, root)
@@ -99,6 +102,19 @@ def run(root: Path) -> None:
             fix_approach=rule.get("fix_approach", "sync"),
         ))
 
+    for vc in value_changes:
+        if not vc["removed"]:
+            continue
+        session.add_warning(Warning(
+            kind="value_locked",
+            severity="error" if vc["affected_literal_uses"] > 0 else "warning",
+            target=f"{vc['file']}::{vc['name']}",
+            detail=(
+                f"{vc['name']}: removed {vc['removed']!r}; "
+                f"{vc['affected_literal_uses']} caller literal use(s) at risk."
+            ),
+        ))
+
     session_store.save(session)
 
     # Build additional context
@@ -123,6 +139,14 @@ def run(root: Path) -> None:
         for rule in coherence:
             sync = ", ".join(rule["sync_with"])
             lines.append(f"  COHERENCE: Rule #{rule['id']} \"{rule['title']}\" — check {sync}")
+
+    for vc in value_changes:
+        if not vc["removed"]:
+            continue
+        lines.append(
+            f"  VALUE_LOCKED: {vc['name']} removed {vc['removed']} — "
+            f"{vc['affected_literal_uses']} caller literal use(s) at risk"
+        )
 
     pending = session.pending_warnings()
     if pending:

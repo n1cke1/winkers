@@ -24,3 +24,4 @@
 
 - **locked** — has callers; don't change signature without updating them.
 - **free** — no callers; modify freely.
+- **value_locked** — a module-level collection of literal values (`{"draft", "sent", ...}`) consumed by some function and tested by callers with literals. Removing a value silently breaks those callers — `scope`, `before_create`, and `impact_check` surface the warning.
