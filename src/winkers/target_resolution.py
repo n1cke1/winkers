@@ -17,16 +17,20 @@ from pathlib import PurePosixPath
 from winkers.models import Graph
 from winkers.search import stem
 
-IntentCategory = str  # "create" | "restructure" | "modify" | "unknown"
+IntentCategory = str  # "create" | "change" | "unknown"
 
 _CREATE_KEYWORDS = frozenset({
     "add", "create", "implement", "new", "build", "introduce", "write",
 })
-_RESTRUCTURE_KEYWORDS = frozenset({
+# Anything that touches existing code: structural moves AND in-place edits.
+# Two categories collapsed into one — the response shape now adapts to what
+# resolve_targets() actually finds (files, functions, or both), not to which
+# keyword group fired.
+_CHANGE_KEYWORDS = frozenset({
+    # structural
     "move", "merge", "consolidate", "combine", "split", "extract",
     "reorganize", "relocate", "flatten", "group",
-})
-_MODIFY_KEYWORDS = frozenset({
+    # in-place
     "change", "refactor", "simplify", "rename", "remove", "delete",
     "optimize", "replace", "rewrite", "extend", "modify", "update",
     "fix", "adjust",
@@ -38,8 +42,7 @@ _MIN_NAME_LEN = 4  # avoid matching short/common tokens like "id", "as", "do"
 # the same stemmer. "consolidating" / "consolidate" / "consolidated" all land
 # on the same stem, regardless of which dictionary snowballstemmer picked.
 _CREATE_STEMS = frozenset(stem(w) for w in _CREATE_KEYWORDS)
-_RESTRUCTURE_STEMS = frozenset(stem(w) for w in _RESTRUCTURE_KEYWORDS)
-_MODIFY_STEMS = frozenset(stem(w) for w in _MODIFY_KEYWORDS)
+_CHANGE_STEMS = frozenset(stem(w) for w in _CHANGE_KEYWORDS)
 
 
 @dataclass
@@ -53,7 +56,12 @@ class ResolvedTargets:
 
 
 def categorize_intent(intent: str) -> IntentCategory:
-    """Classify intent into create/restructure/modify/unknown by keyword."""
+    """Classify intent into create/change/unknown by keyword.
+
+    `change` outranks `create` when both keyword groups appear ("add a new
+    module by consolidating X" → change), so structural verbs always win
+    over the generic "add".
+    """
     if not intent:
         return "unknown"
     words = [w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z0-9]*", intent)]
@@ -62,13 +70,8 @@ def categorize_intent(intent: str) -> IntentCategory:
 
     stems = {stem(w) for w in words}
 
-    # Priority: restructure > modify > create. Reorganization hints are stronger
-    # than generic "change", and both outrank "add" when they co-occur
-    # ("add a new module by consolidating X" → restructure).
-    if stems & _RESTRUCTURE_STEMS:
-        return "restructure"
-    if stems & _MODIFY_STEMS:
-        return "modify"
+    if stems & _CHANGE_STEMS:
+        return "change"
     if stems & _CREATE_STEMS:
         return "create"
     return "unknown"
