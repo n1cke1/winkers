@@ -2,6 +2,26 @@
 
 ## 0.8.1
 
+### value_locked — value-domain breaking change detection
+
+- New marker `value_locked` for module-level collections of literal values
+  (`VALID_STATUSES = {"draft", "sent", ...}`). Catches the I5 benchmark
+  pattern where `locked` doesn't fire: signature stays `(str) -> bool` but
+  removing a value silently breaks every caller passing it as a literal.
+- AST-only detection (tree-sitter, Python-only in this MVP). Bounded:
+  `set` / `frozenset` literals up to 64 values. `dict`, `Enum`, `Literal`
+  type aliases and cross-file value propagation are out of scope (v1.0).
+- Surfaces in three tools:
+  - `scope(file=)` returns a `value_locked_collections` section per file
+    with values, per-value `literal_uses` counts, and `files_with_uses`.
+  - `before_create` (`change` intent_type) returns a `value_changes` block
+    when the intent contains shrinking keywords (simplify, reduce, remove,
+    consolidate, drop, prune…) and touches a file or function tied to a
+    value_locked collection. Includes a `safe_alternative` recommendation.
+  - `impact_check` and the post-write hook compare value sets before/after
+    a write and emit a `value_locked` session warning when a value is
+    removed and at least one caller was passing it as a literal.
+
 ### Control points refinement (graph-mcp-bench findings)
 
 - **`scope(file=)` module coupling** — response now includes `sibling_imports`, `imported_by`, and `migration_cost`. Lets an agent see the actual cost of moving or merging files instead of just "all locked".

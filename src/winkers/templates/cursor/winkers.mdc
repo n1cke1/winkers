@@ -38,3 +38,7 @@ graph and avoid breaking callers.
 - **locked** function = has callers depending on signature. Never change
   param types, order, or return type without updating all callers.
 - **free** function = no callers; modify freely.
+- **value_locked** = a module-level literal collection (`{"draft", "sent", ...}`)
+  read by some function and tested by callers with literal arguments.
+  Removing a value silently breaks them — `scope`, `before_create`, and
+  `impact_check` surface the warning.

@@ -32,6 +32,7 @@ Before non-trivial writes or edits. Skip for typos, comments, one-line tweaks.
 
 - **locked** — has callers. Don't change param types/order/return without updating all callers.
 - **free** — no callers; modify freely.
+- **value_locked** — module-level literal collection (`{"draft", "sent", ...}`) read by code and tested by callers as literals. Removing a value silently breaks them; `scope` / `before_create` / `impact_check` warn.
 - **startup_chain** — changing a startup-chain file can prevent app start.
 - **hotspots** — functions with many callers; high-risk changes.
 
