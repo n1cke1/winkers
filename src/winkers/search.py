@@ -328,6 +328,8 @@ def format_before_create_response(
             "score": m.score,
         }
 
+        if m.fn.intent:
+            entry["intent"] = m.fn.intent
         if m.fn.docstring:
             entry["docstring"] = m.fn.docstring
 
