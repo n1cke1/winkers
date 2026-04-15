@@ -227,6 +227,15 @@ def _load_semantic(root: Path):
     return SemanticStore(root).load()
 
 
+def _load_impact(root: Path):
+    """Load impact.json once per tool call; returns None if missing/empty."""
+    from winkers.impact import ImpactStore
+    impact = ImpactStore(root).load()
+    if not impact.functions:
+        return None
+    return impact
+
+
 def _load_rules(root: Path):
     from winkers.conventions import RulesStore
     return RulesStore(root).load()
@@ -258,7 +267,7 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
         "functions_graph": lambda: _section_functions_graph(graph, zone),
         "conventions": lambda: _section_conventions(root),
         "rules_list": lambda: _section_rules_list(root),
-        "hotspots": lambda: _section_hotspots(graph, min_callers),
+        "hotspots": lambda: _section_hotspots(graph, min_callers, root),
         "routes": lambda: _section_routes(graph, zone),
         "ui_map": lambda: _section_ui_map(graph, zone),
     }
@@ -447,6 +456,57 @@ def _one_liner(text: str, limit: int = 140) -> str:
     return collapsed[: limit - 1].rstrip() + "…"
 
 
+def _impact_section_for_fn(fn, root: Path | None) -> dict | None:
+    """Shape an impact section for scope(function=) from impact.json."""
+    if root is None:
+        return None
+    impact = _load_impact(root)
+    if impact is None:
+        return None
+    report = impact.functions.get(fn.id)
+    if report is None:
+        return None
+    return {
+        "risk_level": report.risk_level,
+        "risk_score": report.risk_score,
+        "summary": report.summary,
+        "safe_operations": list(report.safe_operations),
+        "dangerous_operations": list(report.dangerous_operations),
+        "caller_classifications": [
+            {
+                "caller": cc.caller,
+                "dependency_type": cc.dependency_type,
+                "coupling": cc.coupling,
+                "update_effort": cc.update_effort,
+                "note": cc.note,
+            }
+            for cc in report.caller_classifications
+        ],
+        "action_plan": report.action_plan,
+    }
+
+
+def _similar_logic_for_fn(fn, graph: Graph) -> list[dict]:
+    """Group other functions by shared secondary_intents with `fn`."""
+    if not fn.secondary_intents:
+        return []
+    out: list[dict] = []
+    for tag in fn.secondary_intents:
+        others: list[str] = []
+        for other in graph.functions.values():
+            if other.id == fn.id:
+                continue
+            if tag in (other.secondary_intents or []):
+                others.append(other.id)
+        if not others:
+            continue
+        entry: dict = {"intent": tag, "also_in": others[:10]}
+        if len(others) >= 2:
+            entry["suggestion"] = f"consider extracting shared {tag} logic"
+        out.append(entry)
+    return out
+
+
 def _value_locked_for_file(graph: Graph, file_path: str) -> list[dict]:
     """Compact value_locked_collections block for scope(file=) response."""
     out: list[dict] = []
@@ -481,8 +541,9 @@ def _file_fn_entry(graph: Graph, fid: str) -> dict:
     return entry
 
 
-def _section_hotspots(graph: Graph, min_callers: int) -> dict:
+def _section_hotspots(graph: Graph, min_callers: int, root: Path | None = None) -> dict:
     hotspots = []
+    impact = _load_impact(root) if root is not None else None
     for fn_id, fn in graph.functions.items():
         caller_edges = graph.callers(fn_id)
         if len(caller_edges) < min_callers:
@@ -505,6 +566,11 @@ def _section_hotspots(graph: Graph, min_callers: int) -> dict:
         }
         if fn.intent:
             entry["intent"] = fn.intent
+        if impact is not None:
+            report = impact.functions.get(fn_id)
+            if report is not None:
+                entry["risk_level"] = report.risk_level
+                entry["risk_score"] = report.risk_score
         hotspots.append(entry)
     hotspots.sort(key=lambda h: h["callers_count"], reverse=True)
     return {"min_callers": min_callers, "count": len(hotspots), "hotspots": hotspots}
@@ -597,6 +663,14 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
         semantic_ctx = _semantic_context_for_fn(fn, graph, root)
         if semantic_ctx:
             result["semantic"] = semantic_ctx
+
+        impact_section = _impact_section_for_fn(fn, root)
+        if impact_section:
+            result["impact"] = impact_section
+
+        similar = _similar_logic_for_fn(fn, graph)
+        if similar:
+            result["similar_logic"] = similar
 
         return result
 
@@ -1095,7 +1169,9 @@ def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
 
     if category == "change":
         if targets.functions or targets.paths:
-            return _before_create_change(graph, intent, targets, explicit_fns=targets.functions)
+            return _before_create_change(
+                graph, intent, targets, explicit_fns=targets.functions, root=root,
+            )
         # No explicit targets — fall back to FTS5 to derive function targets.
         fallback_matches = search_functions(graph, intent, zone=zone)
         if fallback_matches:
@@ -1106,7 +1182,7 @@ def _tool_before_create(graph: Graph, args: dict, root: Path) -> dict:
                 if m.fn.id not in derived.functions:
                     derived.functions.append(m.fn.id)
             return _before_create_change(
-                graph, intent, derived, explicit_fns=derived.functions,
+                graph, intent, derived, explicit_fns=derived.functions, root=root,
             )
         return _before_create_unknown(graph, intent, root)
 
@@ -1133,6 +1209,7 @@ def _before_create_change(
     intent: str,
     targets,
     explicit_fns: list[str],
+    root: Path | None = None,
 ) -> dict:
     """Adaptive response for `change` intents.
 
@@ -1156,7 +1233,7 @@ def _before_create_change(
     if file_paths:
         response["files"] = _files_block(graph, file_paths)
 
-    fn_block = _functions_block(graph, file_paths, explicit_set)
+    fn_block = _functions_block(graph, file_paths, explicit_set, root=root)
     if fn_block is not None:
         response["functions"] = fn_block
 
@@ -1164,7 +1241,40 @@ def _before_create_change(
     if value_block:
         response["value_changes"] = value_block
 
+    duplication_block = _duplication_warning(graph, explicit_fns)
+    if duplication_block:
+        response["similar_logic"] = duplication_block
+
     return response
+
+
+def _duplication_warning(graph: Graph, explicit_fns: list[str]) -> list[dict]:
+    """If an explicit target function shares secondary_intents with others,
+    surface them so the caller doesn't inadvertently extend duplicated logic."""
+    seen_tags: set[str] = set()
+    out: list[dict] = []
+    for fid in explicit_fns:
+        fn = graph.functions.get(fid)
+        if fn is None or not fn.secondary_intents:
+            continue
+        for tag in fn.secondary_intents:
+            if tag in seen_tags:
+                continue
+            others = [
+                other.id for other in graph.functions.values()
+                if other.id != fid and tag in (other.secondary_intents or [])
+            ]
+            if not others:
+                continue
+            seen_tags.add(tag)
+            out.append({
+                "intent": tag,
+                "source": fid,
+                "also_in": others[:10],
+                "suggestion": f"'{tag}' appears in other functions too — "
+                "consider extracting instead of duplicating.",
+            })
+    return out
 
 
 def _value_changes_block(
@@ -1277,6 +1387,7 @@ def _functions_block(
     graph: Graph,
     file_paths: list[str],
     explicit_fns: set[str],
+    root: Path | None = None,
 ) -> dict | None:
     """Build affected_fns list. Explicit fns shown in full; zone-expanded
     fns shown locked-only and capped, with totals so the agent sees scale."""
@@ -1308,6 +1419,8 @@ def _functions_block(
     if not chosen_ids:
         return None
 
+    impact = _load_impact(root) if root is not None else None
+
     affected: list[dict] = []
     for fid in chosen_ids:
         fn = graph.functions.get(fid)
@@ -1336,6 +1449,12 @@ def _functions_block(
         }
         if fn.intent:
             affected_entry["intent"] = fn.intent
+        if impact is not None:
+            report = impact.functions.get(fid)
+            if report is not None:
+                affected_entry["risk_level"] = report.risk_level
+                if report.dangerous_operations:
+                    affected_entry["dangerous_operations"] = list(report.dangerous_operations)
         affected.append(affected_entry)
 
     block: dict = {"affected_fns": affected}
@@ -1352,7 +1471,7 @@ def _functions_block(
 
 
 def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
-    hotspots = _section_hotspots(graph, min_callers=3)
+    hotspots = _section_hotspots(graph, min_callers=3, root=root)
     top_hotspots = hotspots.get("hotspots", [])[:5]
 
     zone_intents: dict[str, dict] = {}

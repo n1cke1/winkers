@@ -81,6 +81,19 @@ class GraphStore:
         from winkers.value_locked import detect_value_locked
         detect_value_locked(graph, self.root)
 
+        # Prune stale impact.json entries (no LLM call — stale entries just
+        # stop being returned; real regeneration is a separate `winkers init`).
+        try:
+            from winkers.impact import ImpactStore
+            impact_store = ImpactStore(self.root)
+            impact = impact_store.load()
+            if impact.functions:
+                removed = ImpactStore.prune(impact, set(graph.functions.keys()))
+                if removed:
+                    impact_store.save(impact)
+        except Exception:
+            pass
+
         return graph
 
     def _compute_ast_hashes(self, graph: Graph, files: list[str]) -> None:

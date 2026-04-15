@@ -79,8 +79,15 @@ def _after_command(*_args, **_kwargs):
                    "Saved to .winkers/config.toml for future runs.")
 @click.option("--no-llm", is_flag=True, default=False,
               help="Skip LLM intent generation.")
+@click.option("--no-impact", is_flag=True, default=False,
+              help="Skip pre-computed impact analysis (intent still runs).")
+@click.option("--impact-only", is_flag=True, default=False,
+              help="Only run impact analysis; skip graph/semantic/rules rebuild.")
+@click.option("--force-impact", is_flag=True, default=False,
+              help="Rebuild impact.json even if content_hash is unchanged.")
 def init(path: str, no_semantic: bool, yes: bool, force: bool,
-         ollama_model: str | None, no_llm: bool):
+         ollama_model: str | None, no_llm: bool,
+         no_impact: bool, impact_only: bool, force_impact: bool):
     """Build the dependency graph for the project.
 
     Automatically detects your IDE and registers the MCP server:
@@ -117,6 +124,10 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     root = Path(path).resolve()
     click.echo(f"Scanning {root} ...")
 
+    if impact_only:
+        _run_impact_only(root, force=force_impact)
+        return
+
     builder = GraphBuilder()
     graph = builder.build(root)
 
@@ -146,9 +157,64 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
         _run_semantic_enrichment(root, graph, yes=yes, force=force)
 
     if not no_llm:
-        _run_intent_generation(root, graph, ollama_model=ollama_model)
+        impact_ran = False
+        if not no_impact:
+            impact_ran = _run_impact_generation(
+                root, graph, force=force_impact,
+            )
+        if not impact_ran:
+            _run_intent_generation(root, graph, ollama_model=ollama_model)
+        # Persist intent/secondary_intents updates back to graph.json.
+        store.save(graph)
 
     _autodetect_ide(root)
+
+
+def _run_impact_only(root: Path, force: bool) -> None:
+    """--impact-only: load existing graph, run LLM impact pass, save."""
+    store = GraphStore(root)
+    graph = store.load()
+    if graph is None:
+        click.echo(
+            "  No graph.json found. Run `winkers init` first, or drop "
+            "--impact-only for a full pass."
+        )
+        return
+    ok = _run_impact_generation(root, graph, force=force)
+    if ok:
+        store.save(graph)
+
+
+def _run_impact_generation(root: Path, graph, force: bool) -> bool:
+    """Run the combined intent+impact pass. Returns True if it actually ran."""
+    _load_dotenv(root)
+
+    from winkers.impact import ImpactGenerator, ImpactStore
+    from winkers.intent.provider import ApiProvider, auto_detect, load_config
+
+    intent_cfg = load_config(root)
+    provider = auto_detect(intent_cfg)
+    if not isinstance(provider, ApiProvider):
+        # Combined analysis needs structured JSON — only API provider supports it.
+        # Leave impact.json untouched; caller will fall back to legacy intent gen.
+        return False
+
+    click.echo("  Running impact analysis (LLM) ...")
+    impact_store = ImpactStore(root)
+    impact_file = impact_store.load()
+
+    gen = ImpactGenerator(graph, root, force=force)
+    impact_file = gen.run(impact_file=impact_file, progress_factory=click.progressbar)
+    impact_store.save(impact_file)
+
+    meta = impact_file.meta
+    click.echo(
+        f"  [ok] Impact: {meta.functions_analyzed} analyzed, "
+        f"{meta.functions_skipped} cached, "
+        f"{meta.functions_failed} failed "
+        f"({meta.duration_seconds}s, {meta.llm_model})"
+    )
+    return True
 
 
 def _collect_git_history(root: Path, graph) -> None:
@@ -2102,6 +2168,127 @@ def search(intent: str, path: str, zone: str, as_json: bool):
         if pipeline.downstream:
             for fn in pipeline.downstream:
                 click.echo(f"     ↓ {fn.name}{_fn_signature(fn)}  [{fn.file}:{fn.line_start}]")
+        click.echo()
+
+
+@cli.command("impact")
+@click.argument("fn_query")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
+def impact_cmd(fn_query: str, path: str, as_json: bool):
+    """Print pre-computed impact analysis for a function.
+
+    \b
+    Examples:
+        winkers impact calculate_price
+        winkers impact modules/pricing.py::calculate_price
+        winkers impact build_graph --json
+    """
+    root = Path(path).resolve()
+    graph = GraphStore(root).load()
+    if graph is None:
+        click.echo("Error: graph not built. Run 'winkers init' first.", err=True)
+        raise SystemExit(1)
+
+    from winkers.impact import ImpactStore
+
+    impact = ImpactStore(root).load()
+    if not impact.functions:
+        click.echo(
+            "No impact.json found. Run `winkers init` with an API provider "
+            "(ANTHROPIC_API_KEY set) to generate it."
+        )
+        raise SystemExit(1)
+
+    # Exact fn_id first, then by short name
+    fn_id = fn_query if fn_query in graph.functions else None
+    if fn_id is None:
+        hits = [fid for fid in graph.functions if fid.endswith(f"::{fn_query}")]
+        if len(hits) == 1:
+            fn_id = hits[0]
+        elif len(hits) > 1:
+            click.echo(f"Ambiguous name '{fn_query}'. Candidates:")
+            for h in hits:
+                click.echo(f"  {h}")
+            raise SystemExit(1)
+
+    if fn_id is None:
+        click.echo(f"Function not found: {fn_query}", err=True)
+        raise SystemExit(1)
+
+    report = impact.functions.get(fn_id)
+    if report is None:
+        click.echo(f"No impact report for {fn_id}. Re-run `winkers init`.")
+        raise SystemExit(1)
+
+    if as_json:
+        click.echo(json.dumps({
+            "function": fn_id,
+            "report": report.model_dump(),
+        }, indent=2))
+        return
+
+    click.echo(f"{fn_id}")
+    click.echo(f"  risk:    {report.risk_level} ({report.risk_score:.2f})")
+    click.echo(f"  summary: {report.summary}")
+    if report.safe_operations:
+        click.echo(f"  safe:        {', '.join(report.safe_operations)}")
+    if report.dangerous_operations:
+        click.echo(f"  dangerous:   {', '.join(report.dangerous_operations)}")
+    if report.caller_classifications:
+        click.echo("  callers:")
+        for cc in report.caller_classifications:
+            click.echo(
+                f"    {cc.caller}  {cc.dependency_type}  "
+                f"{cc.coupling}  {cc.update_effort}"
+            )
+            if cc.note:
+                click.echo(f"      ↳ {cc.note}")
+    if report.action_plan:
+        click.echo(f"  action_plan: {report.action_plan}")
+
+
+@cli.command("dupes")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--min-count", default=2, show_default=True,
+              help="Minimum number of functions sharing a tag to report.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
+def dupes_cmd(path: str, min_count: int, as_json: bool):
+    """Find duplicated inline logic via shared secondary_intents."""
+    root = Path(path).resolve()
+    graph = GraphStore(root).load()
+    if graph is None:
+        click.echo("Error: graph not built. Run 'winkers init' first.", err=True)
+        raise SystemExit(1)
+
+    groups: dict[str, list[str]] = {}
+    for fn_id, fn in graph.functions.items():
+        for tag in fn.secondary_intents or []:
+            groups.setdefault(tag, []).append(fn_id)
+
+    filtered = {
+        tag: sorted(fns) for tag, fns in groups.items() if len(fns) >= min_count
+    }
+    filtered = dict(sorted(filtered.items(), key=lambda kv: -len(kv[1])))
+
+    if as_json:
+        click.echo(json.dumps({"groups": filtered}, indent=2))
+        return
+
+    if not filtered:
+        click.echo(
+            f"No duplicated logic found (threshold: {min_count}). "
+            "Run `winkers init` with an API provider to populate secondary_intents."
+        )
+        return
+
+    for tag, fn_ids in filtered.items():
+        click.echo(f'"{tag}" ({len(fn_ids)} functions):')
+        for fid in fn_ids:
+            fn = graph.functions.get(fid)
+            if fn is None:
+                continue
+            click.echo(f"  {fn.name}    {fn.file}:{fn.line_start}")
         click.echo()
 
 

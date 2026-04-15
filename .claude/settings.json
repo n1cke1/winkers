@@ -98,7 +98,8 @@
       "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py -v)",
       "Bash(.venv/Scripts/pytest tests/)",
       "Bash(.venv/Scripts/pytest tests/test_tools.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_value_locked.py -v)"
+      "Bash(.venv/Scripts/pytest tests/test_value_locked.py -v)",
+      "Bash(.venv/Scripts/pytest tests/test_impact_analysis.py -v)"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP"

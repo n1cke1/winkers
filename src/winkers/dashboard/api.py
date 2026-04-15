@@ -44,6 +44,7 @@ def create_app(root: Path) -> web.Application:
     app.router.add_get("/api/history", h_data.history)
     app.router.add_get("/api/snapshot-graph", h_graph.snapshot_graph)
     app.router.add_get("/api/debt", h_data.debt)
+    app.router.add_get("/api/impact", h_data.impact)
     app.router.add_get("/api/source", h_data.source)
     app.router.add_get("/api/sessions", h_sessions.sessions)
     app.router.add_get("/api/insights", h_sessions.insights)

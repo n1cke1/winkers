@@ -30,6 +30,25 @@ def make_handlers(root: Path, store: GraphStore) -> SimpleNamespace:
         data = json.loads(debt_path.read_text(encoding="utf-8"))
         return web.json_response(data)
 
+    async def handle_impact(request: web.Request) -> web.Response:
+        """Per-function risk map for the dashboard heatmap layer."""
+        from winkers.impact import ImpactStore
+        impact = ImpactStore(root).load()
+        if not impact.functions:
+            return web.json_response({"functions": {}, "meta": impact.meta.model_dump()})
+        compact = {
+            fid: {
+                "risk_level": r.risk_level,
+                "risk_score": r.risk_score,
+                "summary": r.summary,
+            }
+            for fid, r in impact.functions.items()
+        }
+        return web.json_response({
+            "functions": compact,
+            "meta": impact.meta.model_dump(),
+        })
+
     async def handle_source(request: web.Request) -> web.Response:
         graph = store.load()
         if graph is None:
@@ -57,6 +76,7 @@ def make_handlers(root: Path, store: GraphStore) -> SimpleNamespace:
         semantic=handle_semantic,
         history=handle_history,
         debt=handle_debt,
+        impact=handle_impact,
         source=handle_source,
     )
 
