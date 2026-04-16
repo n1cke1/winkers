@@ -96,7 +96,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
 2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
-3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code.**
+3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code — one `before_create` per concrete change**, not one per feature. Batched intents resolve fuzzier targets and dilute caller/risk signal.
 4. Write / edit code.
 5. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
