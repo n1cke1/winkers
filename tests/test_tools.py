@@ -821,6 +821,86 @@ def test_try_compact_returns_none_for_empty_categories():
     assert compact["categories"]["style"] == [{"id": 1, "title": "A"}]
 
 
+# ---------------------------------------------------------------------------
+# _files_block — direct_caller_files / importing_files (migration_cost split)
+# ---------------------------------------------------------------------------
+
+def test_files_block_exposes_importing_files_count(graph, tmp_path):
+    """importing_files = unique external files that import from the target.
+
+    Always ≤ migration_cost (which counts raw import edges, not unique files).
+    """
+    from winkers.mcp.tools import _files_block
+    block = _files_block(graph, ["modules/pricing.py"])
+    # api/prices.py and modules/inventory.py import from pricing.
+    assert block["importing_files"] == len(block["imported_by"])
+    # migration_cost can equal or exceed importing_files.
+    assert block["migration_cost"] >= block["importing_files"]
+
+
+def test_files_block_direct_caller_files_fn_level(graph, tmp_path):
+    """When explicit_fns names a specific fn, direct_caller_files lists the
+    ACTUAL call-site files — the tight hands-on editing surface."""
+    from winkers.mcp.tools import _files_block
+
+    fn_id = "modules/pricing.py::calculate_price"
+    block = _files_block(graph, ["modules/pricing.py"], explicit_fns={fn_id})
+
+    # calculate_price is called from api/prices.py and modules/inventory.py.
+    assert "direct_caller_files" in block
+    assert set(block["direct_caller_files"]) == {
+        "api/prices.py", "modules/inventory.py",
+    }
+    assert block["direct_caller_files_count"] == 2
+
+
+def test_files_block_direct_caller_files_absent_without_explicit_fns(graph, tmp_path):
+    """Without explicit_fns the direct-caller surface is not computed — the
+    agent falls back to the importer-level importing_files / migration_cost."""
+    from winkers.mcp.tools import _files_block
+    block = _files_block(graph, ["modules/pricing.py"])
+    assert "direct_caller_files" not in block
+    assert "direct_caller_files_count" not in block
+    assert "importing_files" in block  # importer-level is still there
+
+
+def test_files_block_direct_caller_narrower_than_importing(graph):
+    """Demonstrates why the split matters: importer may not actually call
+    the specific fn we're changing.
+
+    Inject a file that imports from pricing.py but never calls
+    calculate_price — it inflates importing_files but should NOT appear in
+    direct_caller_files for a fn-level intent on calculate_price."""
+    from winkers.mcp.tools import _files_block
+    from winkers.models import FileNode, FunctionNode, ImportEdge
+
+    g = graph.model_copy(deep=True)
+    # Phantom importer: imports the module but only touches get_base_price.
+    g.files["api/debug.py"] = FileNode(
+        path="api/debug.py", language="python", imports=[],
+        function_ids=["api/debug.py::dump_base"],
+    )
+    g.functions["api/debug.py::dump_base"] = FunctionNode(
+        id="api/debug.py::dump_base", file="api/debug.py", name="dump_base",
+        kind="function", language="python", line_start=1, line_end=1, params=[],
+    )
+    g.import_edges.append(ImportEdge(
+        source_file="api/debug.py",
+        target_file="modules/pricing.py",
+        names=["get_base_price"],
+    ))
+    # No call edge from dump_base to calculate_price — only imports the module.
+
+    fn_id = "modules/pricing.py::calculate_price"
+    block = _files_block(g, ["modules/pricing.py"], explicit_fns={fn_id})
+
+    assert "api/debug.py" in block["imported_by"]
+    assert block["importing_files"] >= 3
+    # But the phantom importer doesn't call calculate_price → narrower surface.
+    assert "api/debug.py" not in block["direct_caller_files"]
+    assert block["direct_caller_files_count"] < block["importing_files"]
+
+
 def test_files_block_counts_test_fixtures_separately(graph, tmp_path):
     """Locked functions inside tests/ files increment `locked_test_fns`, not `locked_fns`."""
     from winkers.mcp.tools import _files_block
