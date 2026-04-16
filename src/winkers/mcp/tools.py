@@ -164,7 +164,10 @@ def register_tools(
                     " for scope/before_create."
                     " Entries are compact strings:"
                     " 'file::fn (callers) — intent'  (or no ' — …' when intent"
-                    " is unavailable). Paginated via limit/offset."
+                    " is unavailable)."
+                    " When `file=…` is used, caller call-sites are inlined"
+                    " under each function as '  ← caller_file:line  expression'"
+                    " — handy before editing a file. Paginated via limit/offset."
                 ),
                 inputSchema={
                     "type": "object",
@@ -1006,23 +1009,38 @@ def _tool_browse(graph: Graph, args: dict) -> dict:
     total = len(matched)
     page_ids = matched[offset : offset + limit]
 
+    # When filtering by file the page is small enough that we can interleave
+    # caller call-sites under each function — turning browse(file=…) into a
+    # one-stop view for "who calls what I'm about to edit". Per-fn cost is
+    # ~15 tok per caller, still well under typical orient-level budgets.
+    show_call_sites = bool(file_path)
+
     lines: list[str] = []
     for fid in page_ids:
         fn = graph.functions[fid]
-        callers_count = len(graph.callers(fid))
-        entry = f"{fid} ({callers_count})"
+        caller_edges = graph.callers(fid)
+        entry = f"{fid} ({len(caller_edges)})"
         if fn.intent:
             entry = f"{entry} — {fn.intent}"
         lines.append(entry)
+        if show_call_sites:
+            for e in caller_edges:
+                lines.append(
+                    f"  ← {e.call_site.file}:{e.call_site.line}  "
+                    f"{e.call_site.expression}"
+                )
 
+    # `shown` counts functions, not interleaved caller lines — paging stays
+    # predictable when show_call_sites expands the list.
+    shown_fns = len(page_ids)
     result: dict[str, Any] = {
         "total": total,
-        "shown": len(lines),
+        "shown": shown_fns,
         "offset": offset,
         "functions": lines,
     }
-    if offset + len(lines) < total:
-        result["next_offset"] = offset + len(lines)
+    if offset + shown_fns < total:
+        result["next_offset"] = offset + shown_fns
     if zone:
         result["zone"] = zone
     if file_path:

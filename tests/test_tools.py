@@ -611,9 +611,39 @@ def test_browse_file_filter(graph):
     """file filter restricts results to one file."""
     result = _tool_browse(graph, {"file": "modules/pricing.py"})
     assert result["file"] == "modules/pricing.py"
+    # Entries come in two flavours now: fn lines (start with file::) and
+    # caller lines (start with "  ← "). Both are expected under file=.
     for line in result["functions"]:
-        fid = line.split(" ", 1)[0]
-        assert fid.startswith("modules/pricing.py::")
+        assert (
+            line.startswith("modules/pricing.py::") or line.startswith("  ← ")
+        )
+
+
+def test_browse_file_inlines_caller_call_sites(graph):
+    """Under file= the output interleaves '  ← file:line  expression' lines
+    after each function. `shown` still counts functions (not caller lines)
+    so pagination stays predictable."""
+    result = _tool_browse(graph, {"file": "modules/pricing.py"})
+    # calculate_price has 2 callers in the fixture.
+    fns = [line for line in result["functions"] if not line.startswith("  ← ")]
+    callers = [line for line in result["functions"] if line.startswith("  ← ")]
+    assert "shown" in result
+    assert result["shown"] == len(fns)
+    # At least one caller line present (calculate_price is locked).
+    assert any("calculate_price(item_id, qty)" in line for line in callers)
+    # Caller line format: '  ← <file>:<line>  <expression>'
+    for line in callers:
+        assert ":" in line  # file:line separator
+    # Fn lines stay compact (no callers inlined in themselves).
+    for line in fns:
+        assert " ← " not in line
+
+
+def test_browse_zone_does_not_inline_call_sites(graph):
+    """Caller-line inlining is a file=-only feature — zone browse stays compact."""
+    result = _tool_browse(graph, {"zone": "modules"})
+    for line in result["functions"]:
+        assert not line.startswith("  ← ")
 
 
 def test_browse_min_callers_filter(graph):

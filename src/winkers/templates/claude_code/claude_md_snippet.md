@@ -1,4 +1,4 @@
-<!-- winkers-snippet-version: 0.8.3 -->
+<!-- winkers-snippet-version: 0.8.4 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
@@ -6,7 +6,7 @@
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, rules (`title` + `wrong_approach` one-liner). **First call.**
-2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). Use to pick a target before deep-dive.
+2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
 3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), or safe alternatives. **Prefer explicit targets** — write `fn_name()` / `Class.method()` / path in the intent for precise resolution. **Call before writing any code.**
 4. Write / edit code.
 5. `impact_check` with `file_path: "<path>"` — graph update + duplicate + broken-import check. Auto via hook in Claude Code.
