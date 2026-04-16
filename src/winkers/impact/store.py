@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from winkers.impact.models import ImpactFile
+from winkers.impact.models import SCHEMA_VERSION, ImpactFile
 from winkers.store import STORE_DIR
 
 IMPACT_FILE = "impact.json"
@@ -18,11 +18,18 @@ class ImpactStore:
         self.path = self.store_dir / IMPACT_FILE
 
     def load(self) -> ImpactFile:
-        """Load impact.json, or return empty ImpactFile if missing/corrupt."""
+        """Load impact.json, or return empty ImpactFile if missing/corrupt/stale.
+
+        Files with an outdated schema_version are treated as missing so the
+        next generator run refills them from scratch — prevents legacy data
+        (e.g. v1 hard-truncated dangerous_operations) from leaking forward.
+        """
         if not self.path.exists():
             return ImpactFile()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            if data.get("schema_version") != SCHEMA_VERSION:
+                return ImpactFile()
             return ImpactFile.model_validate(data)
         except Exception:
             return ImpactFile()
