@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from winkers.models import FunctionNode
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"  # v2 widens safe/dangerous_operations maxlen 15 → 100
 
 
 class CallerClassification(BaseModel):

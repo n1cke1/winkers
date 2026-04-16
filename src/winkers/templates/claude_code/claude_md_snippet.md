@@ -1,4 +1,4 @@
-<!-- winkers-snippet-version: 0.8.2 -->
+<!-- winkers-snippet-version: 0.8.3 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.

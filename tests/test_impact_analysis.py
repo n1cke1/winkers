@@ -98,6 +98,34 @@ class TestPromptParser:
         assert len(result.caller_classifications) == 1
         assert result.caller_classifications[0].coupling == "tight"
 
+    def test_preserves_full_operation_descriptions(self):
+        """Issue #1: dangerous_operations / safe_operations must keep the full
+        LLM description, not a 15-char prefix. Benchmark showed fragments like
+        'remove flush() ' and 'change return t' which are unusable for agents."""
+        payload = {
+            "primary_intent": "persists invoice",
+            "secondary_intents": [],
+            "risk_level": "medium",
+            "risk_score": 0.5,
+            "summary": "Writes invoice to DB.",
+            "caller_classifications": [],
+            "safe_operations": [
+                "add an optional parameter with a sensible default value",
+            ],
+            "dangerous_operations": [
+                "change return type from tuple to dataclass — breaks callers",
+            ],
+            "action_plan": "",
+        }
+        result = parse_response(json.dumps(payload))
+        assert result is not None
+        assert result.safe_operations == [
+            "add an optional parameter with a sensible default value",
+        ]
+        assert result.dangerous_operations == [
+            "change return type from tuple to dataclass — breaks callers",
+        ]
+
     def test_parses_response_with_markdown_fences(self):
         raw = (
             '```json\n{"primary_intent":"x","risk_level":"low","risk_score":0.1,'
@@ -187,6 +215,35 @@ class TestImpactStore:
         removed = ImpactStore.prune(impact, live_fn_ids={"alive::f"})
         assert removed == 1
         assert "dead::g" not in impact.functions
+
+    def test_load_discards_outdated_schema_version(self, tmp_path):
+        """A stale schema_version on disk triggers regeneration (returns empty)."""
+        import json
+        store = ImpactStore(tmp_path)
+        store.store_dir.mkdir(parents=True, exist_ok=True)
+        # Legacy v1 payload — what existed before the maxlen fix landed.
+        store.path.write_text(
+            json.dumps({
+                "schema_version": "1",
+                "meta": {},
+                "functions": {
+                    "x::f": {
+                        "content_hash": "abc",
+                        "risk_level": "low",
+                        "risk_score": 0.1,
+                        "summary": "old",
+                        "safe_operations": ["add optional"],  # legacy slice
+                        "dangerous_operations": ["change return"],
+                        "action_plan": "",
+                        "caller_classifications": [],
+                    }
+                },
+            }),
+            encoding="utf-8",
+        )
+        loaded = store.load()
+        # Stale file treated as missing → next generator run refills it cleanly.
+        assert loaded.functions == {}
 
 
 # ---------------------------------------------------------------------------

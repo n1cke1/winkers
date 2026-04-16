@@ -181,15 +181,24 @@ def register_tools(
                             ),
                         },
                         "min_callers": {
-                            "type": "integer",
+                            "oneOf": [
+                                {"type": "integer", "minimum": 0},
+                                {"type": "string", "pattern": "^\\d+$"},
+                            ],
                             "description": "Hide fns with fewer callers (default 0).",
                         },
                         "limit": {
-                            "type": "integer",
+                            "oneOf": [
+                                {"type": "integer", "minimum": 1},
+                                {"type": "string", "pattern": "^\\d+$"},
+                            ],
                             "description": "Page size (default 50, max 100).",
                         },
                         "offset": {
-                            "type": "integer",
+                            "oneOf": [
+                                {"type": "integer", "minimum": 0},
+                                {"type": "string", "pattern": "^\\d+$"},
+                            ],
                             "description": "Starting index into sorted results (default 0).",
                         },
                     },
@@ -309,6 +318,14 @@ _SECTION_PRIORITY = [
     "routes", "ui_map", "functions_graph",
 ]
 
+# Sections that have a compact fallback + the minimum tokens to reserve
+# for each when it's been explicitly requested. Prevents earlier sections
+# from starving the compact-capable ones; observed on large projects where
+# map + conventions ate the entire budget and rules_list silently vanished.
+_COMPACT_RESERVE: dict[str, int] = {
+    "rules_list": 200,
+}
+
 
 def _estimate_tokens(data: Any) -> int:
     """Rough token count: ~4 chars per token in JSON output."""
@@ -322,14 +339,16 @@ def _try_compact(section: str, data: Any) -> Any | None:
     Right now we only know how to shrink `rules_list` (drop wrong_approach
     and related fields — agents can still see the categories and rule titles,
     and fetch details via rule_read). Other sections return None, which the
-    caller treats as "skip the section entirely".
+    caller treats as "skip the section entirely". Also returns None when the
+    compact form would be empty (nothing useful to surface → prefer skip so
+    agents see it in `_skipped` rather than getting a silent empty dict).
     """
     if section != "rules_list":
         return None
     if not isinstance(data, dict):
         return None
     categories = data.get("categories")
-    if not isinstance(categories, dict):
+    if not isinstance(categories, dict) or not categories:
         return None
     compact_categories: dict[str, list[dict]] = {}
     for cat, rules in categories.items():
@@ -337,6 +356,8 @@ def _try_compact(section: str, data: Any) -> Any | None:
             {k: v for k, v in r.items() if k in ("id", "title")}
             for r in rules
         ]
+    if not compact_categories or not any(compact_categories.values()):
+        return None
     return {
         "total": data.get("total"),
         "categories": compact_categories,
@@ -393,17 +414,32 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     skipped: list[str] = []
     compacted: list[str] = []
 
+    # Reserve a floor for compact-capable sections that are still pending,
+    # so earlier sections don't consume the entire budget.
+    pending_compact = [s for s in ordered if s in _COMPACT_RESERVE]
+
     for section in ordered:
         build = builders.get(section)
         if build is None:
             continue
+
+        # Effective ceiling for THIS section: full budget minus whatever we
+        # still need to reserve for yet-to-process compact-capable sections.
+        if section in pending_compact:
+            pending_compact.remove(section)
+        reserved = sum(_COMPACT_RESERVE[s] for s in pending_compact)
+        effective_max = max_tokens - reserved
+
         data = build()
         section_tokens = _estimate_tokens(data)
-        if used_tokens + section_tokens > max_tokens and result:
+
+        if used_tokens + section_tokens > effective_max and result:
             # Try a compact variant before giving up on the section entirely.
             compact = _try_compact(section, data)
             if compact is not None:
                 compact_tokens = _estimate_tokens(compact)
+                # Compact gets the FULL budget (not effective_max) — this is
+                # the fallback path, no further reservation needed.
                 if used_tokens + compact_tokens <= max_tokens:
                     result[section] = compact
                     used_tokens += compact_tokens
@@ -945,12 +981,23 @@ def _tool_browse(graph: Graph, args: dict) -> dict:
     if offset < 0:
         offset = 0
 
+    zone_norm = zone.rstrip("/\\").replace("\\", "/") if zone else None
+
     def _keep(fn_id: str) -> bool:
         fn = graph.functions[fn_id]
         if file_path and fn.file != file_path:
             return False
-        if zone and graph.file_zone(fn.file) != zone:
-            return False
+        if zone_norm:
+            # Accept either the stored zone label (e.g. "modules") OR a path
+            # prefix (e.g. "app/services") — projects whose graph carries only
+            # top-level zone labels can still drill down by subdirectory.
+            fn_file_norm = fn.file.replace("\\", "/")
+            if (
+                graph.file_zone(fn.file) != zone_norm
+                and fn_file_norm != zone_norm
+                and not fn_file_norm.startswith(zone_norm + "/")
+            ):
+                return False
         if min_callers and len(graph.callers(fn_id)) < min_callers:
             return False
         return True
@@ -983,9 +1030,18 @@ def _tool_browse(graph: Graph, args: dict) -> dict:
     if min_callers:
         result["min_callers"] = min_callers
     if total == 0:
+        filters = []
+        if zone:
+            filters.append(f"zone={zone!r}")
+        if file_path:
+            filters.append(f"file={file_path!r}")
+        if min_callers:
+            filters.append(f"min_callers={min_callers}")
+        filter_echo = f" Filters applied: {', '.join(filters)}." if filters else ""
         result["hint"] = (
-            "No functions match. Relax filters — try without zone/file,"
-            " or lower min_callers."
+            "No functions match." + filter_echo
+            + " Try orient(include=['map']) to see valid zone names,"
+            " drop the zone/file filter, or lower min_callers."
         )
     return result
 
@@ -1679,30 +1735,33 @@ def _functions_block(
 
 
 def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
-    hotspots = _section_hotspots(graph, min_callers=3, root=root)
-    top_hotspots = hotspots.get("hotspots", [])[:5]
+    """Compact, actionable response when intent can't be resolved.
 
-    zone_intents: dict[str, dict] = {}
-    try:
-        semantic = _load_semantic(root)
-        if semantic is not None:
-            for zname, zintent in semantic.zone_intents.items():
-                zone_intents[zname] = {
-                    "why": zintent.why,
-                    "wrong_approach": zintent.wrong_approach,
-                }
-    except Exception:
-        pass
-
+    Returning architectural context here (hotspots + zone_intents) produced
+    ~1.5k tokens of noise that agents took as relevant — strictly worse
+    than an empty answer. A short "rewrite your intent like X" is more
+    useful and a lot cheaper.
+    """
     return {
         "intent_type": "unknown",
         "intent": intent,
-        "note": (
-            "Could not resolve specific files or functions from the intent. "
-            "Returning architectural context to avoid an empty answer."
+        "error": "Could not parse intent into resolvable targets.",
+        "hint": (
+            "Rewrite the intent with explicit markers: function names with"
+            " parentheses (e.g. calculate_price()), Class.method(), or a"
+            " relative file path (e.g. app/repos/invoice.py). Combine them"
+            " for precision: 'refactor calculate_price() in app/pricing.py'."
         ),
-        "hotspots": top_hotspots,
-        "zone_intents": zone_intents,
+        "examples": [
+            "refactor calculate_price() to round half-even",
+            "fix InvoiceRepo.get_with_items() selectinload",
+            "add soft_delete() to app/repos/base.py",
+            "rename modules/pricing.py::calc_tax to apply_tax",
+        ],
+        "fallback": (
+            "For architectural context call"
+            " orient(include=['map','conventions','hotspots'])."
+        ),
     }
 
 

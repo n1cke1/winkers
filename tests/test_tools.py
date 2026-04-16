@@ -292,10 +292,18 @@ def test_scope_function_surfaces_intent(graph):
 
 
 def test_before_create_unknown_category(graph, tmp_path):
-    """When no keywords and no targets, returns orient-lite architectural context."""
+    """Unresolvable intent returns a compact actionable hint, not a hotspots dump."""
     result = _tool_before_create(graph, {"intent": "clean up the code"}, tmp_path)
     assert result.get("intent_type") in ("unknown", "create")
-    assert any(k in result for k in ("hotspots", "existing"))
+    if result.get("intent_type") == "unknown":
+        assert "hint" in result
+        assert "examples" in result
+        # No architectural dump — those were noise for agents.
+        assert "hotspots" not in result
+        assert "zone_intents" not in result
+    else:
+        # "create" category still uses FTS5 fallback.
+        assert "existing" in result or "matches" in result
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +650,117 @@ def test_browse_empty_match_returns_hint(graph):
     assert result["total"] == 0
     assert result["functions"] == []
     assert "hint" in result
+    # Hint echoes the filter so the agent sees what to change.
+    assert "nonexistent-zone" in result["hint"]
+
+
+def test_browse_zone_accepts_subdirectory_path(graph):
+    """Issue #2: browse(zone='sub/dir') matches files under that prefix,
+    even when graph stores only a top-level zone label."""
+    from winkers.models import FileNode, FunctionNode
+
+    g = graph.model_copy(deep=True)
+    # Simulate invoicekit shape: all under zone="app", subdir names are paths.
+    g.files["app/services/invoice.py"] = FileNode(
+        path="app/services/invoice.py", language="python", imports=[],
+        function_ids=["app/services/invoice.py::create_invoice"],
+        zone="app",
+    )
+    g.functions["app/services/invoice.py::create_invoice"] = FunctionNode(
+        id="app/services/invoice.py::create_invoice",
+        file="app/services/invoice.py", name="create_invoice",
+        kind="function", language="python",
+        line_start=1, line_end=1, params=[],
+    )
+    g.files["app/repos/invoice.py"] = FileNode(
+        path="app/repos/invoice.py", language="python", imports=[],
+        function_ids=["app/repos/invoice.py::get_with_items"],
+        zone="app",
+    )
+    g.functions["app/repos/invoice.py::get_with_items"] = FunctionNode(
+        id="app/repos/invoice.py::get_with_items",
+        file="app/repos/invoice.py", name="get_with_items",
+        kind="function", language="python",
+        line_start=1, line_end=1, params=[],
+    )
+
+    result = _tool_browse(g, {"zone": "app/services"})
+    # Only the services/ file matches, even though both files carry zone="app".
+    ids = {line.split(" ", 1)[0] for line in result["functions"]}
+    assert "app/services/invoice.py::create_invoice" in ids
+    assert "app/repos/invoice.py::get_with_items" not in ids
+
+
+def test_browse_zone_still_matches_label(graph):
+    """Backward compat: browse(zone='modules') still works as a plain label match."""
+    result = _tool_browse(graph, {"zone": "modules"})
+    assert result["total"] > 0
+    for line in result["functions"]:
+        fid = line.split(" ", 1)[0]
+        file = fid.split("::", 1)[0]
+        # All results must be under modules/ (either via label or prefix).
+        assert graph.file_zone(file) == "modules" or file.startswith("modules/")
+
+
+def test_browse_int_params_accept_strings(graph):
+    """Issue #3: handler coerces string integers so MCP clients that stringify
+    args don't silently lose the call. Schema-level fix exercised indirectly
+    via the handler's int() coercion."""
+    result = _tool_browse(
+        graph, {"min_callers": "1", "limit": "3", "offset": "0"}
+    )
+    assert result["shown"] <= 3
+    assert result["min_callers"] == 1
+
+
+def test_orient_rules_list_survives_budget_starvation(graph, tmp_path):
+    """Issue #5: rules_list is not silently dropped when map/conventions eat
+    most of the budget — a reserved floor keeps the compact form visible."""
+    from winkers.conventions import ConventionRule, RulesFile, RulesStore
+    rules = RulesFile(rules=[
+        ConventionRule(
+            id=i, category="style", title=f"Rule {i}",
+            content="Lorem ipsum " * 20,
+            wrong_approach="Do not do the thing " * 20,
+            source="manual",
+            created="2026-04-16",
+        )
+        for i in range(1, 8)
+    ])
+    RulesStore(tmp_path).save(rules)
+
+    # Tight budget where full map+conventions+rules_list would overflow,
+    # but the compact-rules reserve should guarantee it survives.
+    result = _tool_orient(
+        graph,
+        {"include": ["map", "conventions", "rules_list"], "max_tokens": 700},
+        tmp_path,
+    )
+    assert "rules_list" in result
+    # Non-empty categories — guard against the old non-None-but-empty bug.
+    rl = result["rules_list"]
+    assert rl.get("categories"), (
+        f"rules_list must surface categories, got {rl!r}"
+    )
+
+
+def test_try_compact_returns_none_for_empty_categories():
+    """Issue #5 (part 1): _try_compact returns None (skip) when there's nothing
+    meaningful to show, rather than a non-None dict with empty categories."""
+    from winkers.mcp.tools import _try_compact
+    # Empty categories → skip.
+    assert _try_compact("rules_list", {"total": 0, "categories": {}}) is None
+    # Missing categories → skip.
+    assert _try_compact("rules_list", {"total": 0}) is None
+    # Rules_list with real content → compact variant returned.
+    compact = _try_compact("rules_list", {
+        "total": 1,
+        "categories": {
+            "style": [{"id": 1, "title": "A", "wrong_approach": "avoid this"}]
+        },
+    })
+    assert compact is not None
+    assert compact["categories"]["style"] == [{"id": 1, "title": "A"}]
 
 
 def test_files_block_counts_test_fixtures_separately(graph, tmp_path):
