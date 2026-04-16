@@ -112,7 +112,9 @@
       "Bash(.venv/Scripts/pytest tests/test_cli.py -x --tb=short)",
       "Bash(.venv/Scripts/pytest tests/test_target_resolution.py -x --tb=short)",
       "Bash(.venv/Scripts/pytest tests/test_tools.py -x --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py::test_orient_compacts_rules_when_over_budget -x --tb=long)"
+      "Bash(.venv/Scripts/pytest tests/test_tools.py::test_orient_compacts_rules_when_over_budget -x --tb=long)",
+      "Bash(.venv/Scripts/python /tmp/show_before_create.py)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -k browse --tb=short)"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP",

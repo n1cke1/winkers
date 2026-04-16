@@ -14,7 +14,7 @@ Before non-trivial writes or edits. Skip for typos, comments, one-line tweaks.
 ## Workflow
 
 1. `orient include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, rules (`title` + `wrong_approach` one-liner). **First call.**
-2. `before_create intent: "<goal>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Call before writing any code.**
+2. `before_create intent: "<goal>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code — one `before_create` per concrete change**, not one per feature. Batched intents dilute caller/risk signal.
 3. Write / edit code.
 4. `impact_check file_path: "<path>"` — graph update + duplicate + broken-import check. Auto via hook in Claude Code.
 
