@@ -199,8 +199,8 @@ def _validate(data: dict) -> AnalysisResult:
         except (TypeError, ValueError):
             continue
 
-    safe_ops = _str_list(data.get("safe_operations", []), maxlen=15)
-    dangerous_ops = _str_list(data.get("dangerous_operations", []), maxlen=15)
+    safe_ops = _str_list(data.get("safe_operations", []), maxlen=100)
+    dangerous_ops = _str_list(data.get("dangerous_operations", []), maxlen=100)
     action_plan = _str(data, "action_plan", maxlen=600).strip()
 
     return AnalysisResult(

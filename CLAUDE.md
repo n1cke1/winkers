@@ -87,7 +87,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
 
-<!-- winkers-snippet-version: 0.8.2 -->
+<!-- winkers-snippet-version: 0.8.3 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
