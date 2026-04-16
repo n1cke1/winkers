@@ -2,198 +2,26 @@
   "permissions": {
     "allow": [
       "mcp__winkers__*",
+      "Bash(.venv/Scripts/pytest tests/:*)",
+      "Bash(.venv/Scripts/pytest tests/ -v:*)",
+      "Bash(.venv/Scripts/pytest tests/ -q:*)",
+      "Bash(.venv/Scripts/pytest tests/ -x:*)",
+      "Bash(.venv/Scripts/pytest tests/ --tb=short:*)",
+      "Bash(.venv/Scripts/python -m pytest tests/:*)",
+      "Bash(.venv/Scripts/ruff check src/ tests/)",
+      "Bash(.venv/Scripts/python -m winkers --help)",
       "Bash(.venv/Scripts/python -c \":*)",
+      "Bash(git fetch:*)",
       "Bash(gh run:*)",
       "Bash(gh issue:*)",
-      "Bash(.venv/Scripts/pytest tests/ -v -x -k \"init or install or claude\")",
       "Bash(gh api:*)",
-      "Read(//c/Users/NP/.ssh/**)",
-      "Bash(ssh -o StrictHostKeyChecking=no root@***REDACTED-VPS*** \"echo OK\")",
-      "Bash(ssh root@***REDACTED-VPS*** \"code tunnel --accept-server-license-terms 2>&1 &\")",
-      "Bash(ssh -t root@***REDACTED-VPS*** \"timeout 10 code tunnel --accept-server-license-terms 2>&1 || true\")",
-      "Bash(ssh root@***REDACTED-VPS*** \"code tunnel status 2>&1; code tunnel rename winkers-vps 2>&1 || true\")",
-      "Bash(ssh root@***REDACTED-VPS***:*)",
-      "Bash(ssh -t root@***REDACTED-VPS*** \"timeout 15 claude login 2>&1\")",
-      "Bash(git fetch:*)",
       "Bash(gh repo:*)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_cli.py -v --tb=short)",
-      "Bash(grep -r \"winkers analyze\\\\|winkers improve\\\\|improve loop\" /c/Development/Winkers/*.md)",
-      "Bash(ls -la /c/Development/Winkers/*.md)",
-      "Bash(.venv/Scripts/pytest tests/test_improve.py -v --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_protect.py -v --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_commit_format.py -v --tb=short)",
       "Bash(pip install:*)",
+      "Bash(pip index:*)",
       "Bash(twine check:*)",
       "Bash(twine upload:*)",
-      "Bash(xxd c:/Development/Winkers/tests/__init__.py)",
-      "Bash(.venv/Scripts/python -m winkers --help)",
-      "Bash(ls c:/Development/Winkers/*.md)",
-      "Bash(xargs ls:*)",
-      "Bash(.venv/Scripts/pytest tests/test_search.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_duplicates.py tests/test_impact.py tests/test_session_state.py -v)",
-      "Bash(.venv/Scripts/pytest tests/ -v --tb=no -q)",
-      "Bash(.venv/Scripts/pytest tests/test_session_done.py -v)",
-      "Bash(.venv/Scripts/pytest tests/ -v --tb=short -q)",
       "WebSearch",
-      "WebFetch(domain:gist.github.com)",
-      "Bash(.venv/Scripts/pytest tests/test_hooks.py -v)",
-      "Bash(where ollama:*)",
-      "Bash(winget search:*)",
-      "Bash(winget install:*)",
-      "Bash(.venv/Scripts/python -c \"import httpx; print\\(httpx.__version__\\)\")",
-      "Bash(.venv/Scripts/python -c \"import tomllib; print\\('ok'\\)\")",
-      "Bash(.venv/Scripts/pytest tests/test_intent.py -v)",
-      "Bash(ollama --version)",
-      "Bash(\"C:\\\\Users\\\\NP\\\\AppData\\\\Local\\\\Programs\\\\Ollama\\\\ollama.exe\" --version)",
-      "Bash(\"C:\\\\Users\\\\NP\\\\AppData\\\\Local\\\\Programs\\\\Ollama\\\\ollama.exe\" pull:*)",
-      "Bash(.venv/Scripts/pytest tests/ -q --no-header)",
-      "Bash(.venv/Scripts/python -m pytest tests/ -x -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_intent.py tests/test_hooks.py tests/test_session_done.py tests/test_tools.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/ -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/ -x -q --timeout=30)",
-      "Bash(timeout 120 .venv/Scripts/python -m pytest tests/ -q --tb=line)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -c ':*)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_intent.py tests/test_hooks.py tests/test_session_done.py tests/test_tools.py tests/test_search.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_analyzer.py tests/test_cli.py tests/test_commit_format.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_dashboard.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/ --ignore=tests/test_cli.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/ --ignore=tests/test_cli.py --ignore=tests/test_analyzer.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_conventions.py tests/test_detectors.py tests/test_duplicates.py tests/test_e2e.py tests/test_graph.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_models.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_conventions.py tests/test_detectors.py tests/test_duplicates.py tests/test_e2e.py tests/test_graph.py tests/test_impact.py tests/test_improve.py tests/test_languages.py tests/test_models.py tests/test_parser.py tests/test_phase1.py tests/test_protect.py tests/test_recorder.py tests/test_resolver.py tests/test_semantic.py tests/test_session_state.py tests/test_store.py tests/test_ui_map.py tests/test_commit_format.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_conventions.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_analyzer.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py -v --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py::test_init_creates_graph -v --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py::test_init_exit_code -v --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_intent.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_cli.py::test_help_shows_commands -v)",
-      "Bash(.venv/Scripts/python -m pytest tests/ -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/ --ignore=tests/test_cli.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_intent.py tests/test_hooks.py tests/test_session_done.py tests/test_tools.py tests/test_search.py tests/test_models.py tests/test_impact.py tests/test_duplicates.py tests/test_session_state.py tests/test_conventions.py tests/test_e2e.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_search.py tests/test_intent.py tests/test_hooks.py tests/test_session_done.py tests/test_tools.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_analyzer.py tests/test_commit_format.py tests/test_conventions.py tests/test_dashboard.py tests/test_detectors.py tests/test_duplicates.py tests/test_e2e.py tests/test_graph.py tests/test_hooks.py tests/test_impact.py tests/test_improve.py tests/test_intent.py tests/test_languages.py tests/test_models.py tests/test_parser.py tests/test_phase1.py tests/test_protect.py tests/test_recorder.py tests/test_resolver.py tests/test_search.py tests/test_semantic.py tests/test_session_done.py tests/test_session_state.py tests/test_store.py tests/test_tools.py tests/test_ui_map.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_analyzer.py tests/test_commit_format.py tests/test_conventions.py tests/test_dashboard.py tests/test_detectors.py tests/test_duplicates.py tests/test_e2e.py tests/test_graph.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_improve.py tests/test_languages.py tests/test_models.py tests/test_parser.py tests/test_phase1.py tests/test_protect.py tests/test_recorder.py tests/test_resolver.py tests/test_semantic.py tests/test_session_state.py tests/test_store.py tests/test_ui_map.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_models.py tests/test_store.py tests/test_resolver.py tests/test_semantic.py tests/test_ui_map.py tests/test_recorder.py tests/test_improve.py tests/test_languages.py tests/test_phase1.py tests/test_protect.py tests/test_parser.py tests/test_session_state.py -q)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_analyzer.py tests/test_conventions.py tests/test_dashboard.py tests/test_detectors.py tests/test_duplicates.py tests/test_e2e.py tests/test_graph.py tests/test_improve.py tests/test_languages.py tests/test_models.py tests/test_parser.py tests/test_phase1.py tests/test_protect.py tests/test_recorder.py tests/test_resolver.py tests/test_semantic.py tests/test_session_state.py tests/test_store.py tests/test_ui_map.py tests/test_commit_format.py tests/test_impact.py tests/test_search.py tests/test_intent.py tests/test_hooks.py tests/test_session_done.py tests/test_tools.py -q --tb=line)",
-      "Read(//c/Development/**)",
-      "Bash(\\\\.bat)",
-      "Bash(runner\")",
-      "Bash(.venv/Scripts/python -m pytest tests/test_ui_map.py -v --tb=short)",
-      "Bash(pip index:*)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py tests/test_cli.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py -v --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py tests/test_recorder.py tests/test_improve.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_intent.py tests/test_hooks.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_hooks.py tests/test_intent.py tests/test_session_done.py tests/test_tools.py tests/test_ui_map.py tests/test_search.py -q --tb=short)",
-      "Bash(.venv/Scripts/python -m pytest tests/test_ui_map.py tests/test_hooks.py tests/test_tools.py tests/test_intent.py -q --tb=short)",
-      "Bash(find /c/Development/Winkers/src -name \"*.py\" -exec grep -l \"after_create\" {} \\\\;)",
-      "Bash(xargs grep:*)",
-      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py tests/test_session_state.py tests/test_session_done.py tests/test_models.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py -v)",
-      "Bash(.venv/Scripts/pytest tests/)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_value_locked.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_impact_analysis.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -x -q)",
-      "Bash(.venv/Scripts/python scripts/spike_self_attr.py \"C:/Development/MCP graph bench/invoicekit\")",
-      "Bash(.venv/Scripts/python scripts/spike_self_attr.py .)",
-      "Bash(.venv/Scripts/pytest tests/test_self_attr_resolver.py -v)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py tests/test_value_locked.py -q)",
-      "Bash(grep -n \"def is_locked\" /c/Development/Winkers/src/winkers/*.py)",
-      "Bash(grep -rn \"before_create\" /c/Development/Winkers/tests/*.py)",
-      "Bash(grep -rn \"def test_\\\\|test.*pattern\\\\|skip.*test\" /c/Development/Winkers/src/winkers/*.py)",
-      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py tests/test_tools.py -x --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_cli.py -x --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_target_resolution.py -x --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -x --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py::test_orient_compacts_rules_when_over_budget -x --tb=long)",
-      "Bash(.venv/Scripts/python /tmp/show_before_create.py)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -k browse --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -k files_block --tb=short)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -k \"route or flask\" --tb=short)",
-      "Bash(awk '{print NR\": \"length\" chars\"}' src/winkers/templates/claude_code/claude_md_snippet.md)",
-      "Bash(python -c \"import pathlib; print\\(len\\(pathlib.Path\\('src/winkers/templates/claude_code/claude_md_snippet.md'\\).read_text\\(encoding='utf-8'\\)\\) // 4\\)\")",
-      "Bash(python -c \"import pathlib; s = pathlib.Path\\('src/winkers/templates/claude_code/claude_md_snippet.md'\\).read_text\\(encoding='utf-8'\\); print\\(f'{len\\(s\\)} chars, ~{len\\(s\\)//4} tokens'\\)\")"
-    ],
-    "additionalDirectories": [
-      "C:\\Users\\NP",
-      "C:\\Users\\NP\\.claude\\plans"
-    ]
-  },
-  "hooks": {
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "git add -A && git diff --cached --quiet || git commit -m 'wip: auto-commit from Claude session' --no-verify",
-            "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Users/NP/AppData/Local/Programs/Python/Python313/Scripts/winkers.EXE record --hook",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Development/Winkers/.venv/Scripts/winkers.EXE hook prompt-enrich C:/Development/Winkers",
-            "timeout": 2
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Development/Winkers/.venv/Scripts/winkers.EXE hook pre-write C:/Development/Winkers",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Development/Winkers/.venv/Scripts/winkers.EXE hook post-write C:/Development/Winkers",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "C:/Development/Winkers/.venv/Scripts/winkers.EXE hook session-audit C:/Development/Winkers",
-            "timeout": 10
-          }
-        ]
-      }
+      "WebFetch(domain:gist.github.com)"
     ]
   }
 }
