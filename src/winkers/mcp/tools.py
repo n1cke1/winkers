@@ -951,6 +951,7 @@ def _tool_rule_read(args: dict, root: Path) -> dict:
 
 _BROWSE_LIMIT_DEFAULT = 50
 _BROWSE_LIMIT_MAX = 100
+_BROWSE_FILE_HINT_LIMIT = 20
 
 
 def _tool_browse(graph: Graph, args: dict) -> dict:
@@ -1056,11 +1057,37 @@ def _tool_browse(graph: Graph, args: dict) -> dict:
         if min_callers:
             filters.append(f"min_callers={min_callers}")
         filter_echo = f" Filters applied: {', '.join(filters)}." if filters else ""
-        result["hint"] = (
-            "No functions match." + filter_echo
-            + " Try orient(include=['map']) to see valid zone names,"
-            " drop the zone/file filter, or lower min_callers."
-        )
+
+        # When a zone was requested but yielded nothing, surface the list of
+        # files that live under that zone/prefix. Actionable: the agent can
+        # immediately drill down with browse(file=…). If min_callers is the
+        # culprit (zone has fns but all below threshold) we stay silent on
+        # files so the real hint is to lower the threshold.
+        zone_files: list[str] = []
+        if zone_norm and not min_callers:
+            for path in sorted(graph.files):
+                fn_file_norm = path.replace("\\", "/")
+                if (
+                    graph.file_zone(path) == zone_norm
+                    or fn_file_norm == zone_norm
+                    or fn_file_norm.startswith(zone_norm + "/")
+                ):
+                    zone_files.append(path)
+                    if len(zone_files) >= _BROWSE_FILE_HINT_LIMIT:
+                        break
+        if zone_files:
+            result["files_in_zone"] = zone_files
+            result["hint"] = (
+                "No functions match." + filter_echo
+                + " The zone contains files listed in `files_in_zone` —"
+                " drill down with browse(file=<path>)."
+            )
+        else:
+            result["hint"] = (
+                "No functions match." + filter_echo
+                + " Try orient(include=['map']) to see valid zone names,"
+                " drop the zone/file filter, or lower min_callers."
+            )
     return result
 
 

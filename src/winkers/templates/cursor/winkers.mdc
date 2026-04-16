@@ -19,7 +19,7 @@ graph and avoid breaking callers.
 ## Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `before_create` with `intent: "<goal>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Call before writing any code.**
+2. `before_create` with `intent: "<goal>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code — one `before_create` per concrete change**, not one per feature. Batched intents dilute caller/risk signal.
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 

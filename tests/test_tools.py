@@ -682,6 +682,34 @@ def test_browse_empty_match_returns_hint(graph):
     assert "hint" in result
     # Hint echoes the filter so the agent sees what to change.
     assert "nonexistent-zone" in result["hint"]
+    # No zone files existed under that name → no files_in_zone fallback.
+    assert "files_in_zone" not in result
+
+
+def test_browse_empty_zone_surfaces_file_list(graph):
+    """When zone matches real files but yields 0 functions (e.g. all fns
+    filtered out by some other mechanism, or zone label exists but fn.intent
+    is just unpopulated and min_callers cuts everything out), the response
+    lists the files so the agent can drill down with browse(file=...)."""
+    from winkers.models import FileNode
+
+    g = graph.model_copy(deep=True)
+    # Ensure an "empty" zone: add a file with no functions under a subdir.
+    g.files["app/empty/placeholder.py"] = FileNode(
+        path="app/empty/placeholder.py", language="python", imports=[],
+        function_ids=[], zone="app",
+    )
+    g.files["app/empty/other.py"] = FileNode(
+        path="app/empty/other.py", language="python", imports=[],
+        function_ids=[], zone="app",
+    )
+    result = _tool_browse(g, {"zone": "app/empty"})
+    assert result["total"] == 0
+    assert "files_in_zone" in result
+    assert "app/empty/placeholder.py" in result["files_in_zone"]
+    assert "app/empty/other.py" in result["files_in_zone"]
+    # Hint should point at browse(file=) as the next step.
+    assert "browse(file=" in result["hint"]
 
 
 def test_browse_zone_accepts_subdirectory_path(graph):

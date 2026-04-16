@@ -11,7 +11,10 @@ The server starts automatically via `.mcp.json`. Seven tools available.
 
 2. **`before_create`** with `intent: "<what you want>"` — matches, migration
    cost, affected callers (expressions + risk), `similar_logic` warnings for
-   duplicated logic, or safe alternatives. **Call before writing any code.**
+   duplicated logic. **Prefer explicit targets** — `fn_name()` /
+   `Class.method()` / path in intent for precise resolution.
+   **Call before writing any code — one `before_create` per concrete
+   change**, not one per feature. Batched intents dilute caller/risk signal.
 
 3. Write / edit code.
 
