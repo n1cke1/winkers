@@ -34,13 +34,9 @@ def register_tools(
                     " 'rules_list' = coding rules grouped by category."
                     " 'functions_graph' = indexed call graph."
                     " 'hotspots' = high-impact functions."
-                    " 'routes' = HTTP endpoints (method + path + handler fn"
-                    " + top callees + optional Jinja template), detected"
-                    " from Flask/FastAPI/Django/aiohttp route decorators."
-                    " Empty on projects without web handlers."
-                    " Per-fn route info is also inlined into scope/browse/"
-                    "hotspots/before_create responses, so you rarely need to"
-                    " request this section explicitly."
+                    " 'routes' = HTTP endpoints (Flask/FastAPI/Django/aiohttp)."
+                    " Route info is also inlined per-fn in scope/browse/"
+                    "hotspots/before_create — this section is rarely needed."
                     " 'ui_map' = route→template links with UI elements."
                     " Then use convention_read/rule_read for details."
                 ),
@@ -74,14 +70,26 @@ def register_tools(
             Tool(
                 name="scope",
                 description=(
-                    "Full context for a function or file: callers, callees,"
-                    " related rules, recent git changes."
+                    "Deep context for one function or file."
+                    " function=: callers + callees with call-site expressions,"
+                    " `route`/`http_method` when the fn is an HTTP handler,"
+                    " pre-computed `impact` (risk_level, safe/dangerous_operations,"
+                    " caller_classifications, action_plan), `similar_logic`"
+                    " (functions sharing secondary_intents), related rules,"
+                    " recent git changes."
+                    " file=: per-fn entries (with route when applicable),"
+                    " imports, `migration_cost`, `value_locked_collections`,"
+                    " startup_chain warning."
+                    " Accepts `file::fn` or `file::Class.method` ids."
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "function": {"type": "string", "description": "Function ID or name"},
-                        "file": {"type": "string", "description": "File path"},
+                        "function": {
+                            "type": "string",
+                            "description": "Function id: `file::fn` or `file::Class.method`",
+                        },
+                        "file": {"type": "string", "description": "Relative file path"},
                     },
                 },
             ),
@@ -163,17 +171,14 @@ def register_tools(
             Tool(
                 name="browse",
                 description=(
-                    "List functions with their LLM-generated intents —"
-                    " mid-level inventory between orient and scope."
-                    " Use after orient to skim what functions live in a zone"
-                    " or file, and what each one does, before picking a target"
-                    " for scope/before_create."
-                    " Entries are compact strings:"
-                    " 'file::fn (callers) — intent'  (or no ' — …' when intent"
-                    " is unavailable)."
-                    " When `file=…` is used, caller call-sites are inlined"
-                    " under each function as '  ← caller_file:line  expression'"
-                    " — handy before editing a file. Paginated via limit/offset."
+                    "Mid-level function inventory between orient and scope."
+                    " Entry format: 'file::fn (callers) [METHOD /path]? — intent?'."
+                    " With `file=`, caller call-sites are inlined under each fn"
+                    " as '  ← caller_file:line  expression' — one-shot"
+                    " 'who calls what I'm about to edit' view."
+                    " When `zone=` yields 0 fns but matches real files, the"
+                    " response surfaces `files_in_zone` so you can drill down"
+                    " with browse(file=…). Paginated via limit/offset."
                 ),
                 inputSchema={
                     "type": "object",
