@@ -72,7 +72,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ## MCP tools (8 total)
 
 - `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "ui_map". Shows session status if active.
-- `browse(zone?, file?, min_callers?, limit?, offset?)` — mid-level function inventory between orient and scope. Returns `"file::fn (callers) — intent"` strings, paginated. Intent omitted when null. Use after orient to scan what functions exist and what they do before picking a target.
+- `browse(zone?, file?, min_callers?, limit?, offset?)` — mid-level function inventory between orient and scope. Returns `"file::fn (callers) — intent"` strings, paginated. Intent omitted when null. With `file=`, caller call-sites are inlined under each fn as `"  ← caller_file:line  expression"` — browse becomes a one-shot "who calls what I'm about to edit" view. Use after orient to scan what functions exist and what they do before picking a target.
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes. Function-level response also returns pre-computed `impact` (risk_level/safe+dangerous ops/classified callers/action_plan) and `similar_logic` (functions sharing `secondary_intents`) when impact.json exists.
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
 - `rule_read(category)` — all rules for a category + wrong_approach; use orient rules_list for available categories
@@ -87,7 +87,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
 
-<!-- winkers-snippet-version: 0.8.3 -->
+<!-- winkers-snippet-version: 0.8.4 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
@@ -95,7 +95,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 ### Workflow
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
-2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). Use to pick a target before deep-dive.
+2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
 3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings, or safe alternatives. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code.**
 4. Write / edit code.
 5. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
