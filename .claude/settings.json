@@ -114,7 +114,12 @@
       "Bash(.venv/Scripts/pytest tests/test_tools.py -x --tb=short)",
       "Bash(.venv/Scripts/pytest tests/test_tools.py::test_orient_compacts_rules_when_over_budget -x --tb=long)",
       "Bash(.venv/Scripts/python /tmp/show_before_create.py)",
-      "Bash(.venv/Scripts/pytest tests/test_tools.py -k browse --tb=short)"
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -k browse --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -k files_block --tb=short)",
+      "Bash(.venv/Scripts/pytest tests/test_tools.py -k \"route or flask\" --tb=short)",
+      "Bash(awk '{print NR\": \"length\" chars\"}' src/winkers/templates/claude_code/claude_md_snippet.md)",
+      "Bash(python -c \"import pathlib; print\\(len\\(pathlib.Path\\('src/winkers/templates/claude_code/claude_md_snippet.md'\\).read_text\\(encoding='utf-8'\\)\\) // 4\\)\")",
+      "Bash(python -c \"import pathlib; s = pathlib.Path\\('src/winkers/templates/claude_code/claude_md_snippet.md'\\).read_text\\(encoding='utf-8'\\); print\\(f'{len\\(s\\)} chars, ~{len\\(s\\)//4} tokens'\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\NP",
