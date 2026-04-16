@@ -96,7 +96,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
 2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
-3. `before_create` with `intent: "<what you want to do>"` — matches, migration cost, affected callers (expressions + risk), `similar_logic` warnings. **Prefer explicit targets** — `fn_name()` / `Class.method()` / path in intent for precise resolution. **Call before writing any code — one `before_create` per concrete change**, not one per feature. Batched intents resolve fuzzier targets and dilute caller/risk signal.
+3. `before_create` with `intent: "<what you want>"` — matches, affected callers (expressions + risk), `similar_logic`. **Prefer explicit targets** (`fn_name()` / `Class.method()` / path / `file.py::fn`). **One call per concrete change** — batched intents dilute signal. **Before writing any code.**
 4. Write / edit code.
 5. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
 
@@ -117,5 +117,5 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - **free** — no callers; modify freely.
 - **risk_level** — `low`/`medium`/`high`/`critical` per function from `scope.impact` / `hotspots`; heed `dangerous_operations` before editing.
 - **secondary_intents** — inline sub-task tags; `similar_logic` flags duplicated logic — extract rather than duplicate.
-- **direct_caller_files** vs **migration_cost** in `before_create.files`: `direct_caller_files` is the tight hands-on editing surface (files that actually *call* the specific fn being changed). `migration_cost` is the loose upper bound (raw import-edge count). Prefer `direct_caller_files` on fn-level intents; fall back to `importing_files` / `migration_cost` for file/zone-level intents.
-- **route / http_method** — attached to a fn when it's an HTTP handler (Flask / FastAPI / Django / aiohttp decorator). Appears inline in `scope(function=)`, `browse` (`[METHOD /path]` marker), `hotspots`, and `before_create.affected_fns`. `orient(include=['routes'])` returns the full endpoint list for API-overview queries.
+- **direct_caller_files** vs **migration_cost** (`before_create.files`) — `direct_caller_files` = files that actually *call* the fn being changed (tight surface). `migration_cost` = raw import-edge count (loose upper bound). Prefer `direct_caller_files` on fn-level intents.
+- **route / http_method** — HTTP-handler marker (Flask / FastAPI / Django / aiohttp). Inlined in `scope`, `browse` (`[METHOD /path]`), `hotspots`, `before_create.affected_fns`.
