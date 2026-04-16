@@ -1555,7 +1555,9 @@ def _before_create_change(
     }
 
     if analysis_paths:
-        response["files"] = _files_block(graph, analysis_paths)
+        response["files"] = _files_block(
+            graph, analysis_paths, explicit_fns=explicit_fns,
+        )
 
     fn_block = _functions_block(graph, file_paths, explicit_set, root=root)
     if fn_block is not None:
@@ -1646,10 +1648,33 @@ def _value_changes_block(
     return block or None
 
 
-def _files_block(graph: Graph, file_paths: list[str]) -> dict:
+def _files_block(
+    graph: Graph,
+    file_paths: list[str],
+    explicit_fns: set[str] | None = None,
+) -> dict:
+    """Per-file coupling and impact metrics for the before_create `files` block.
+
+    Three distinct "how much needs to change" signals:
+
+    - ``importing_files``: unique external files that import from anything in
+      the resolved set. Upper bound on "files that reference our module
+      surface" — a module-level change touches all of them.
+    - ``migration_cost``: raw count of *import edges* from external files.
+      Will exceed ``len(importing_files)`` when a single file imports several
+      symbols from a target. Kept for backward compat; prefer
+      ``direct_caller_files`` for fn-level intents.
+    - ``direct_caller_files``: when the intent names specific functions
+      (``explicit_fns``), the unique external files that actually *invoke*
+      those functions. This is the real hands-on editing surface — only set
+      when explicit fns are resolved, otherwise the importer-level bound is
+      as tight as we can be without fn info.
+    """
     from winkers.target_resolution import is_test_path
 
     resolved_set = set(file_paths)
+    explicit_fns = explicit_fns or set()
+
     cross_imports = 0
     external_importers: set[str] = set()
     migration_cost = 0
@@ -1684,11 +1709,29 @@ def _files_block(graph: Graph, file_paths: list[str]) -> dict:
     block: dict = {
         "cross_imports": cross_imports,
         "imported_by": sorted(external_importers),
+        "importing_files": len(external_importers),
         "migration_cost": migration_cost,
         "locked_fns": prod_locked,
     }
     if test_locked:
         block["locked_test_fns"] = test_locked
+
+    # Direct-caller surface: only meaningful when the intent named specific
+    # functions. Collect external files that contain actual call-sites to
+    # those functions, not just an import of the module.
+    if explicit_fns:
+        direct_caller_files: set[str] = set()
+        for fid in explicit_fns:
+            if fid not in graph.functions:
+                continue
+            for edge in graph.callers(fid):
+                caller_file = edge.call_site.file
+                if caller_file in resolved_set:
+                    continue
+                direct_caller_files.add(caller_file)
+        block["direct_caller_files"] = sorted(direct_caller_files)
+        block["direct_caller_files_count"] = len(direct_caller_files)
+
     return block
 
 

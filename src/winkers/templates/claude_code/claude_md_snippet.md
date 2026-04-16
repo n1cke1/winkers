@@ -29,3 +29,4 @@
 - **value_locked** — module-level literal set; removing a value breaks callers passing it as a literal.
 - **risk_level** — `low`/`medium`/`high`/`critical` per function from `scope.impact` / `hotspots`; heed `dangerous_operations` before editing.
 - **secondary_intents** — inline sub-task tags; `similar_logic` flags duplicated logic — extract rather than duplicate.
+- **direct_caller_files** vs **migration_cost** (in `before_create.files`): `direct_caller_files` is the tight hands-on editing surface — files that actually *call* the specific function you're changing. `migration_cost` is the loose upper bound (raw import-edge count) — high values are noisy on fn-level intents. **Prefer `direct_caller_files` when present; fall back to `importing_files` / `migration_cost` only for file/zone-level intents.**
