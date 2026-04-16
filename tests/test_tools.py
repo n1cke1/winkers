@@ -646,6 +646,87 @@ def test_browse_zone_does_not_inline_call_sites(graph):
         assert not line.startswith("  ← ")
 
 
+# ---------------------------------------------------------------------------
+# Route info surfacing in per-fn views (scope / browse / hotspots / before_create)
+# ---------------------------------------------------------------------------
+
+FLASK_FIXTURE = Path(__file__).parent / "fixtures" / "flask_project"
+
+
+@pytest.fixture(scope="module")
+def flask_graph():
+    g = GraphBuilder().build(FLASK_FIXTURE)
+    CrossFileResolver().resolve(g, str(FLASK_FIXTURE))
+    return g
+
+
+def test_scope_function_surfaces_route(flask_graph):
+    """scope(function=) on a handler includes route / http_method / template."""
+    result = _tool_scope(
+        flask_graph, {"function": "app.py::product_list"},
+    )
+    fn_entry = result["function"]
+    assert fn_entry.get("route") == "/products"
+    assert fn_entry.get("http_method") == "GET"
+    assert fn_entry.get("template") == "products/list.html"
+
+
+def test_scope_file_entries_surface_route(flask_graph):
+    """scope(file=) functions[] entries include route when the fn is a handler."""
+    result = _tool_scope(flask_graph, {"file": "app.py"})
+    product_create = next(
+        e for e in result["functions"] if e["name"] == "product_create"
+    )
+    assert product_create.get("route") == "/products"
+    assert product_create.get("http_method") == "POST"
+
+
+def test_browse_inlines_route_marker(flask_graph):
+    """browse prefixes handler lines with '[METHOD /path]' after the (callers) count."""
+    result = _tool_browse(flask_graph, {"file": "app.py"})
+    index_line = next(
+        line for line in result["functions"] if "::index" in line
+    )
+    assert "[GET /]" in index_line
+    post_line = next(
+        line for line in result["functions"] if "::product_create" in line
+    )
+    assert "[POST /products]" in post_line
+
+
+def test_browse_skips_route_marker_for_non_handlers(graph):
+    """Plain fns (no @route decorator) don't get a '[...]' marker."""
+    result = _tool_browse(graph, {"file": "modules/pricing.py"})
+    for line in result["functions"]:
+        if line.startswith("  ← "):
+            continue
+        # No marker for business-logic functions in the non-web fixture.
+        assert "[GET " not in line and "[POST " not in line
+
+
+def test_hotspots_include_route(flask_graph, tmp_path):
+    """orient.hotspots adds route/http_method on handler entries."""
+    from winkers.mcp.tools import _section_hotspots
+    section = _section_hotspots(flask_graph, min_callers=0, root=tmp_path)
+    hotspots = section["hotspots"]
+    index_entry = next(h for h in hotspots if "index" in h["function"])
+    assert index_entry.get("route") == "/"
+    assert index_entry.get("http_method") == "GET"
+
+
+def test_before_create_affected_fns_include_route(flask_graph, tmp_path):
+    """affected_fns carry route info so agents see HTTP context inline."""
+    result = _tool_before_create(
+        flask_graph,
+        {"intent": "change product_list() response format"},
+        tmp_path,
+    )
+    affected = result["functions"]["affected_fns"]
+    entry = next(e for e in affected if e["name"] == "product_list")
+    assert entry.get("route") == "/products"
+    assert entry.get("http_method") == "GET"
+
+
 def test_browse_min_callers_filter(graph):
     """min_callers hides functions with fewer callers than threshold."""
     result = _tool_browse(graph, {"min_callers": 1})

@@ -34,7 +34,13 @@ def register_tools(
                     " 'rules_list' = coding rules grouped by category."
                     " 'functions_graph' = indexed call graph."
                     " 'hotspots' = high-impact functions."
-                    " 'routes' = HTTP endpoints."
+                    " 'routes' = HTTP endpoints (method + path + handler fn"
+                    " + top callees + optional Jinja template), detected"
+                    " from Flask/FastAPI/Django/aiohttp route decorators."
+                    " Empty on projects without web handlers."
+                    " Per-fn route info is also inlined into scope/browse/"
+                    "hotspots/before_create responses, so you rarely need to"
+                    " request this section explicitly."
                     " 'ui_map' = route→template links with UI elements."
                     " Then use convention_read/rule_read for details."
                 ),
@@ -707,7 +713,26 @@ def _file_fn_entry(graph: Graph, fid: str) -> dict:
     }
     if fn.intent:
         entry["intent"] = fn.intent
+    _attach_route(entry, fn)
     return entry
+
+
+def _attach_route(entry: dict, fn) -> None:
+    """Add route/http_method/template to a per-fn dict when fn is a handler."""
+    if fn.route:
+        entry["route"] = fn.route
+        if fn.http_method:
+            entry["http_method"] = fn.http_method
+        if fn.template:
+            entry["template"] = fn.template
+
+
+def _route_marker(fn) -> str:
+    """Compact '[METHOD /path]' marker for inline use in browse strings."""
+    if not fn.route:
+        return ""
+    method = fn.http_method or "GET"
+    return f"[{method} {fn.route}]"
 
 
 def _section_hotspots(graph: Graph, min_callers: int, root: Path | None = None) -> dict:
@@ -735,6 +760,7 @@ def _section_hotspots(graph: Graph, min_callers: int, root: Path | None = None) 
         }
         if fn.intent:
             entry["intent"] = fn.intent
+        _attach_route(entry, fn)
         if impact is not None:
             report = impact.functions.get(fn_id)
             if report is not None:
@@ -808,6 +834,7 @@ def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:
         }
         if fn.intent:
             function_entry["intent"] = fn.intent
+        _attach_route(function_entry, fn)
         result = {
             "function": function_entry,
             "callers": [
@@ -1020,7 +1047,10 @@ def _tool_browse(graph: Graph, args: dict) -> dict:
     for fid in page_ids:
         fn = graph.functions[fid]
         caller_edges = graph.callers(fid)
+        route_marker = _route_marker(fn)
         entry = f"{fid} ({len(caller_edges)})"
+        if route_marker:
+            entry = f"{entry} {route_marker}"
         if fn.intent:
             entry = f"{entry} — {fn.intent}"
         lines.append(entry)
@@ -1801,6 +1831,7 @@ def _functions_block(
         }
         if fn.intent:
             affected_entry["intent"] = fn.intent
+        _attach_route(affected_entry, fn)
         if impact is not None:
             report = impact.functions.get(fid)
             if report is not None:
