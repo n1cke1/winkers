@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 
 from tree_sitter import Language, Node, Parser, QueryCursor
 
 from winkers.languages.base import LanguageProfile
+
+log = logging.getLogger(__name__)
+
+# Track query failures across the run — accessible to GraphBuilder so it can
+# include them in graph.meta. Without this, broken queries silently return
+# empty matches (one such bug went unnoticed in the JS profile until a spike
+# diagnosed it). Warn on first occurrence per (language, error) pair.
+_query_errors: list[dict] = []
+_warned_pairs: set[tuple[str, str]] = set()
+
+
+def query_errors() -> list[dict]:
+    """Return all query errors collected since process start.
+
+    GraphBuilder calls this to surface failures in graph.meta. Resetting is
+    not provided — the run is assumed short-lived (one `winkers init`).
+    """
+    return list(_query_errors)
 
 
 def _load_language(lang_name: str) -> Language:
@@ -85,7 +104,8 @@ class TreeSitterParser:
                 q = lang.query(query_str)
             cursor = QueryCursor(q)
             return list(cursor.matches(result.tree.root_node))
-        except Exception:
+        except Exception as e:
+            _record_query_error(result.profile.language, query_str, e)
             return []
 
     def query_captures(
@@ -100,7 +120,8 @@ class TreeSitterParser:
             cursor = QueryCursor(q)
             result_caps = cursor.captures(result.tree.root_node)
             return result_caps if isinstance(result_caps, dict) else {}
-        except Exception:
+        except Exception as e:
+            _record_query_error(result.profile.language, query_str, e)
             return {}
 
     def query(
@@ -109,3 +130,22 @@ class TreeSitterParser:
         """Flat list of (node, capture_name) — for backwards compat."""
         caps = self.query_captures(result, query_str)
         return [(node, name) for name, nodes in caps.items() for node in nodes]
+
+
+def _record_query_error(language: str, query_str: str, exc: Exception) -> None:
+    """Log query failure once per (language, error message) and remember it."""
+    msg = str(exc)
+    pair = (language, msg)
+    _query_errors.append({
+        "language": language,
+        "error": msg,
+        "query_excerpt": query_str.strip().split("\n", 1)[0][:80],
+    })
+    if pair not in _warned_pairs:
+        _warned_pairs.add(pair)
+        log.warning(
+            "tree-sitter query failed for language=%s: %s. "
+            "This may indicate a profile/grammar mismatch — affected files "
+            "will return zero matches for this query.",
+            language, msg,
+        )

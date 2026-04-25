@@ -66,6 +66,313 @@ def _after_command(*_args, **_kwargs):
         )
 
 
+def _run_units_pipeline(root: Path, graph, force: bool = False,
+                        concurrency: int = 1) -> dict:
+    """Phase 1 description-first units pipeline.
+
+    1. Scan templates for sections (winkers/templates/scanner.py).
+    2. Identify stale function_units (ast_hash mismatch) and stale
+       template sections (content_hash mismatch).
+    3. Re-describe stale units via `claude --print` subprocess
+       (subscription auth, sequential — concurrency risks rate limits).
+    4. Prune orphan units (graph fn no longer exists, section disappeared).
+    5. Run coupling aggregator over all units → traceability_units.
+    6. Re-embed only changed units (BGE-M3, incremental hash check).
+
+    Returns a stats dict for the caller's progress report.
+    """
+    from winkers.data_files.scanner import (
+        discover_data_files, read_data_file,
+    )
+    from winkers.descriptions.aggregator import (
+        detect_couplings, proposed_to_unit,
+    )
+    from winkers.descriptions.author import (
+        author_data_file_description,
+        author_function_description,
+        author_template_description,
+    )
+    from winkers.descriptions.store import (
+        UnitsStore, data_file_hash, section_hash,
+    )
+    from winkers.embeddings import (
+        embed_units, load_index, save_index, INDEX_FILENAME,
+    )
+    from winkers.templates.scanner import scan_project
+
+    store = UnitsStore(root)
+    units = store.load()
+    stats = {
+        "fn_described": 0, "fn_failed": 0,
+        "template_described": 0, "template_failed": 0,
+        "data_described": 0, "data_failed": 0,
+        "couplings": 0,
+        "embed_reused": 0, "embed_encoded": 0,
+    }
+
+    # ── 1. Scan templates ────────────────────────────────────────────────
+    sections = scan_project(root)  # filtered to leaves by scanner
+    live_template_ids = {f"template:{s.file}#{s.id}" for s in sections}
+    section_by_uid = {f"template:{s.file}#{s.id}": s for s in sections}
+
+    # ── 1b. Scan data files (JSON/YAML) ─────────────────────────────────
+    data_paths = discover_data_files(root)
+    data_entries: list = []
+    for p in data_paths:
+        e = read_data_file(p, root)
+        if e is not None:
+            data_entries.append(e)
+    live_data_ids = {f"data:{e.rel_path}" for e in data_entries}
+    data_by_uid = {f"data:{e.rel_path}": e for e in data_entries}
+
+    # ── 2. Identify stale ────────────────────────────────────────────────
+    graph_fn_summary = {
+        fn.id: {"ast_hash": fn.ast_hash}
+        for fn in graph.functions.values()
+    }
+    live_fn_ids = set(graph_fn_summary.keys())
+    if force:
+        stale_fn_ids = live_fn_ids
+        stale_tpl_ids = live_template_ids
+        stale_data_ids = live_data_ids
+    else:
+        stale_fn_ids = store.stale_function_units(units, graph_fn_summary)
+        stale_tpl_ids = store.stale_template_units(units, sections)
+        stale_data_ids = store.stale_data_file_units(units, data_entries)
+
+    click.echo(
+        f"  {len(stale_fn_ids)} function unit(s), "
+        f"{len(stale_tpl_ids)} template section(s), "
+        f"{len(stale_data_ids)} data file(s) need description"
+    )
+
+    # ── 3. Author descriptions for stale function units ────────────────
+    if stale_fn_ids:
+        # Build per-fn contexts up front (sync, cheap) so the parallel
+        # phase only does the slow work (`claude --print`).
+        fn_contexts: list[dict] = []
+        for fn_id in sorted(stale_fn_ids):
+            fn = graph.functions.get(fn_id)
+            if fn is None:
+                continue
+            src_path = root / fn.file
+            if not src_path.exists():
+                stats["fn_failed"] += 1
+                continue
+            src_lines = src_path.read_text(encoding="utf-8").splitlines()
+            fn_source = "\n".join(
+                src_lines[fn.line_start - 1: fn.line_end]
+            )
+            caller_sigs: list[str] = []
+            seen: set[str] = set()
+            for edge in graph.call_edges:
+                if edge.target_fn != fn_id or edge.source_fn in seen:
+                    continue
+                seen.add(edge.source_fn)
+                c = graph.functions.get(edge.source_fn)
+                if c is None:
+                    continue
+                params = ", ".join(p.name for p in c.params)
+                prefix = f"{c.class_name}." if c.class_name else ""
+                caller_sigs.append(f"def {prefix}{c.name}({params})")
+                if len(caller_sigs) >= 2:
+                    break
+            display_name = (
+                f"{fn.class_name}.{fn.name}" if fn.class_name else fn.name
+            )
+            fn_contexts.append({
+                "fn_id": fn_id, "fn": fn, "fn_source": fn_source,
+                "display_name": display_name, "caller_sigs": caller_sigs,
+            })
+
+        # Run `claude --print` calls in a thread pool. Each subprocess
+        # blocks on its own stdin/stdout, so threads are fine (no GIL
+        # contention on subprocess.run). Concurrency caps shared
+        # subscription rate-limit pressure — recommended ≤4.
+        def _describe_fn(ctx):
+            return ctx, author_function_description(
+                fn_source=ctx["fn_source"],
+                file_path=ctx["fn"].file,
+                fn_name=ctx["display_name"],
+                callers=ctx["caller_sigs"],
+                cwd=root,
+            )
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with click.progressbar(
+            length=len(fn_contexts), label="Function descriptions",
+        ) as bar:
+            with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+                futures = [ex.submit(_describe_fn, c) for c in fn_contexts]
+                for fut in as_completed(futures):
+                    ctx, desc = fut.result()
+                    if desc is None:
+                        stats["fn_failed"] += 1
+                    else:
+                        fn = ctx["fn"]
+                        unit = {
+                            "id": ctx["fn_id"],
+                            "kind": "function_unit",
+                            "name": ctx["display_name"],
+                            "anchor": {
+                                "file": fn.file,
+                                "fn": fn.name,
+                                **({"class": fn.class_name}
+                                   if fn.class_name else {}),
+                            },
+                            "source_hash": fn.ast_hash,
+                            "description": desc.description,
+                            "hardcoded_artifacts": [
+                                a.model_dump(exclude_none=True)
+                                for a in desc.hardcoded_artifacts
+                            ],
+                        }
+                        # Upsert is single-threaded — only the main thread
+                        # runs as_completed callbacks, no race on `units`.
+                        units = store.upsert(units, unit)
+                        # Persist after each unit so an interrupted run
+                        # leaves a usable partial index (resumable on next
+                        # `init --with-units`).
+                        store.save(units)
+                        stats["fn_described"] += 1
+                    bar.update(1)
+
+    # ── 4. Author descriptions for stale template sections ─────────────
+    if stale_tpl_ids:
+        tpl_contexts: list[dict] = []
+        for uid in sorted(stale_tpl_ids):
+            sec = section_by_uid.get(uid)
+            if sec is None:
+                continue
+            neighbors = [s.id for s in sections if s.id != sec.id][:5]
+            tpl_contexts.append({"uid": uid, "sec": sec, "neighbors": neighbors})
+
+        def _describe_tpl(ctx):
+            sec = ctx["sec"]
+            return ctx, author_template_description(
+                section_html=sec.content,
+                file_path=sec.file,
+                section_id=sec.id,
+                leading_comment=sec.leading_comment,
+                neighbor_section_ids=ctx["neighbors"],
+                cwd=root,
+            )
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with click.progressbar(
+            length=len(tpl_contexts), label="Template descriptions",
+        ) as bar:
+            with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+                futures = [ex.submit(_describe_tpl, c) for c in tpl_contexts]
+                for fut in as_completed(futures):
+                    ctx, desc = fut.result()
+                    if desc is None:
+                        stats["template_failed"] += 1
+                    else:
+                        sec = ctx["sec"]
+                        unit = {
+                            "id": ctx["uid"],
+                            "kind": "traceability_unit",
+                            "name": f"Section #{sec.id} ({sec.file})",
+                            "source_files": [sec.file],
+                            "source_anchors": [f"{sec.file}#{sec.id}"],
+                            "source_hash": section_hash(sec.content),
+                            "description": desc.description,
+                            "hardcoded_artifacts": [
+                                a.model_dump(exclude_none=True)
+                                for a in desc.hardcoded_artifacts
+                            ],
+                        }
+                        units = store.upsert(units, unit)
+                        store.save(units)
+                        stats["template_described"] += 1
+                    bar.update(1)
+
+    # ── 4b. Author descriptions for stale data files ────────────────────
+    if stale_data_ids:
+        data_contexts: list[dict] = []
+        for uid in sorted(stale_data_ids):
+            entry = data_by_uid.get(uid)
+            if entry is None:
+                continue
+            data_contexts.append({"uid": uid, "entry": entry})
+
+        def _describe_data(ctx):
+            entry = ctx["entry"]
+            return ctx, author_data_file_description(
+                file_content=entry.content,
+                file_path=entry.rel_path,
+                cwd=root,
+            )
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with click.progressbar(
+            length=len(data_contexts), label="Data file descriptions",
+        ) as bar:
+            with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+                futures = [ex.submit(_describe_data, c) for c in data_contexts]
+                for fut in as_completed(futures):
+                    ctx, desc = fut.result()
+                    if desc is None:
+                        stats["data_failed"] += 1
+                    else:
+                        entry = ctx["entry"]
+                        unit = {
+                            "id": ctx["uid"],
+                            "kind": "traceability_unit",
+                            "name": f"Data file {entry.rel_path}",
+                            "source_files": [entry.rel_path],
+                            "source_anchors": [entry.rel_path],
+                            "source_hash": data_file_hash(entry.content),
+                            "description": desc.description,
+                            "hardcoded_artifacts": [
+                                a.model_dump(exclude_none=True)
+                                for a in desc.hardcoded_artifacts
+                            ],
+                        }
+                        units = store.upsert(units, unit)
+                        store.save(units)
+                        stats["data_described"] += 1
+                    bar.update(1)
+
+    # ── 5. Prune orphans ────────────────────────────────────────────────
+    units = store.prune_orphans(
+        units, live_fn_ids, live_template_ids, live_data_ids,
+    )
+
+    # ── 6. Coupling aggregator ──────────────────────────────────────────
+    # Re-detect from primary units (exclude prior auto-detected couplings
+    # so we don't bootstrap couplings from couplings).
+    primary = [
+        u for u in units
+        if u.get("hardcoded_artifacts")
+        and (u.get("meta") or {}).get("origin") != "auto-detected"
+    ]
+    clusters = detect_couplings(primary)
+    units = [
+        u for u in units
+        if (u.get("meta") or {}).get("origin") != "auto-detected"
+    ]
+    units.extend(proposed_to_unit(c) for c in clusters)
+    stats["couplings"] = len(clusters)
+
+    # ── 7. Save units.json ──────────────────────────────────────────────
+    store.save(units)
+
+    # ── 8. Embeddings (incremental) ─────────────────────────────────────
+    idx_path = root / ".winkers" / INDEX_FILENAME
+    existing_idx = load_index(idx_path)
+    new_idx, embed_stats = embed_units(units, existing=existing_idx, force=force)
+    save_index(new_idx, idx_path)
+    stats["embed_reused"] = embed_stats["reused"]
+    stats["embed_encoded"] = embed_stats["encoded"]
+
+    return stats
+
+
 @cli.command()
 @click.argument("path", default=".", type=click.Path(exists=True))
 @click.option("--no-semantic", is_flag=True, default=False,
@@ -85,9 +392,21 @@ def _after_command(*_args, **_kwargs):
               help="Only run impact analysis; skip graph/semantic/rules rebuild.")
 @click.option("--force-impact", is_flag=True, default=False,
               help="Rebuild impact.json even if content_hash is unchanged.")
+@click.option("--with-units", is_flag=True, default=False,
+              help="Run description-first units pipeline: per-fn/per-section "
+                   "descriptions, coupling detection, BGE-M3 embeddings. "
+                   "Sequential `claude --print` calls, ~30s per unit. "
+                   "Off by default — opt in.")
+@click.option("--force-units", is_flag=True, default=False,
+              help="Re-describe all units ignoring source-hash cache.")
+@click.option("--units-concurrency", type=int, default=1,
+              help="Parallel `claude --print` workers for description "
+                   "generation. 1=sequential (safest). 3-4 cuts wall time "
+                   "but shares subscription rate-limit headroom. Max 4.")
 def init(path: str, no_semantic: bool, yes: bool, force: bool,
          ollama_model: str | None, no_llm: bool,
-         no_impact: bool, impact_only: bool, force_impact: bool):
+         no_impact: bool, impact_only: bool, force_impact: bool,
+         with_units: bool, force_units: bool, units_concurrency: int):
     """Build the dependency graph for the project.
 
     Automatically detects your IDE and registers the MCP server:
@@ -140,6 +459,12 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     _collect_git_history(root, graph)
 
     store = GraphStore(root)
+    # Compute ast_hash for every function — used by `units` pipeline
+    # staleness detection. Cheap (one read per file + AST normalization).
+    # Without this, function_unit description-cache invalidation can't
+    # work and `--with-units` re-describes nothing.
+    all_files = list(graph.files.keys())
+    store._compute_ast_hashes(graph, all_files)
     store.save(graph)
     _save_history_snapshot(root, graph)
 
@@ -166,6 +491,29 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
             _run_intent_generation(root, graph, ollama_model=ollama_model)
         # Persist intent/secondary_intents updates back to graph.json.
         store.save(graph)
+
+    if with_units or force_units:
+        concurrency = max(1, min(4, int(units_concurrency)))
+        click.echo(f"\nUnits pipeline (concurrency={concurrency}):")
+        try:
+            us = _run_units_pipeline(
+                root, graph,
+                force=force_units, concurrency=concurrency,
+            )
+            click.echo(
+                f"  fn: {us['fn_described']} described, {us['fn_failed']} failed; "
+                f"templates: {us['template_described']} described, "
+                f"{us['template_failed']} failed; "
+                f"data: {us['data_described']} described, "
+                f"{us['data_failed']} failed"
+            )
+            click.echo(
+                f"  couplings: {us['couplings']} cluster(s); "
+                f"embeddings: {us['embed_reused']} reused, "
+                f"{us['embed_encoded']} encoded"
+            )
+        except Exception as exc:
+            click.echo(f"  units pipeline failed: {exc}", err=True)
 
     _autodetect_ide(root)
 
@@ -1071,6 +1419,29 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
             "timeout": 5,
             "matcher": "Write|Edit|MultiEdit",
             "label": "post-write impact check",
+        },
+        # Phase 3 — coherence audit lifecycle.
+        # SessionStart records the git HEAD baseline so SessionEnd's
+        # audit can compute an honest diff (not just HEAD~1 vs HEAD).
+        {
+            "event": "SessionStart",
+            "marker": "session-start",
+            "command": f"{hook_bin} hook session-start {root_posix}",
+            "timeout": 2,
+            "matcher": "",
+            "label": "session-start baseline",
+        },
+        # SessionEnd uses the *spawn* variant — it detaches the slow
+        # `claude --print` audit subprocess and returns immediately so
+        # the session-end completion isn't blocked. The actual audit
+        # runs out-of-band and writes `.winkers_pending.md`.
+        {
+            "event": "SessionEnd",
+            "marker": "stop-audit-spawn",
+            "command": f"{hook_bin} hook stop-audit-spawn {root_posix}",
+            "timeout": 5,
+            "matcher": "",
+            "label": "stop-audit (detached)",
         },
     ]
 
@@ -2359,6 +2730,90 @@ def hook_session_audit(path: str):
     run(Path(path).resolve())
 
 
+@hook.command("session-start")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_session_start(path: str):
+    """SessionStart hook: persist current git HEAD as audit baseline.
+
+    Called at the very beginning of each Claude Code session. The
+    SessionEnd `stop-audit` reads this file to compute an honest
+    diff between session-start and session-end (not just last commit).
+    """
+    from winkers.hooks.session_start import run
+    run(Path(path).resolve())
+
+
+@hook.command("stop-audit")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_stop_audit(path: str):
+    """SessionEnd hook: run cross-file coherence audit (in-process).
+
+    Synchronous — takes ~30-60s to spawn `claude --print`. Use
+    `stop-audit-spawn` from settings.json so SessionEnd doesn't block
+    on this. Direct invocation is for manual runs / tests.
+    """
+    from winkers.hooks.stop_audit import run
+    run(Path(path).resolve())
+
+
+@hook.command("stop-audit-spawn")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def hook_stop_audit_spawn(path: str):
+    """SessionEnd hook entry: detach `stop-audit` and return immediately.
+
+    Wired into `.claude/settings.json` SessionEnd. Spawns the
+    `winkers hook stop-audit` child as a detached process so the
+    Claude Code session-end completion isn't blocked on the ~30s
+    audit subprocess.
+
+    Cross-platform: uses `subprocess.Popen` without `wait()`, with
+    flags that prevent the child from being killed when the parent
+    SessionEnd hook exits.
+    """
+    import subprocess
+    import sys
+    import os
+
+    root = Path(path).resolve()
+    # Path to our own CLI — same one currently executing.
+    winkers_bin = sys.executable
+    if winkers_bin.lower().endswith("python.exe") or \
+       winkers_bin.lower().endswith("python"):
+        # Running via `python -m`; spawn the same way.
+        cmd = [winkers_bin, "-m", "winkers.cli.main",
+               "hook", "stop-audit", str(root)]
+    else:
+        # Likely the installed `winkers.exe` entry point.
+        cmd = [winkers_bin, "hook", "stop-audit", str(root)]
+
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        "cwd": str(root),
+    }
+    if sys.platform == "win32":
+        # Detach so the child outlives the parent SessionEnd hook.
+        # CREATE_NO_WINDOW (0x08000000) suppresses cmd-window pop-up;
+        # DETACHED_PROCESS (0x00000008) breaks the parent-child link.
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NO_WINDOW
+            | subprocess.DETACHED_PROCESS
+        )
+    else:
+        # POSIX: start a new session so SIGHUP from parent doesn't
+        # kill us when SessionEnd completes.
+        kwargs["start_new_session"] = True
+
+    try:
+        subprocess.Popen(cmd, **kwargs)
+    except Exception as e:
+        # Hook must exit cleanly even if spawn fails — don't block
+        # SessionEnd on our own infrastructure.
+        click.echo(f"stop-audit-spawn: {e}", err=True)
+
+
 # ---------------------------------------------------------------------------
 # intent subcommands — LLM intent eval + management
 # ---------------------------------------------------------------------------
@@ -2479,6 +2934,458 @@ def dashboard(path: str, port: int, no_browser: bool):
     if not no_browser:
         webbrowser.open(url)
     run_dashboard(root, port=port)
+
+
+# ---------------------------------------------------------------------------
+# describe-fn — Phase 1 description-author CLI
+# ---------------------------------------------------------------------------
+
+@cli.command("describe-fn")
+@click.argument("fn_id")
+@click.option("--root", "-r", default=".", type=click.Path(exists=True),
+              help="Project root containing .winkers/graph.json")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the formatted prompt without invoking claude")
+@click.option("--save", is_flag=True, default=False,
+              help="Append/replace this unit in .winkers/units.json")
+def describe_fn(fn_id: str, root: str, dry_run: bool, save: bool):
+    """Generate a rich description for one function unit.
+
+    Reads .winkers/graph.json to find the function and its 1-2 nearest
+    callers, formats the description-author prompt, and either prints
+    the prompt (--dry-run) or invokes `claude --print` to produce the
+    description (subscription-first, no API key required).
+
+    \b
+    Example:
+      winkers describe-fn engine/chp_model.py::solve_design -r /path/to/project
+    """
+    import json as _json
+
+    from winkers.descriptions.author import author_function_description
+    from winkers.descriptions.prompts import format_function_prompt
+
+    root_path = Path(root).resolve()
+    graph_path = root_path / ".winkers" / "graph.json"
+    if not graph_path.exists():
+        click.echo(
+            f"No graph at {graph_path}. Run `winkers init` first.",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    graph = _json.loads(graph_path.read_text(encoding="utf-8"))
+    fn = graph["functions"].get(fn_id)
+    if fn is None:
+        click.echo(f"Function not found: {fn_id}", err=True)
+        # Help the user discover correct ids.
+        suffix = fn_id.split("::")[-1] if "::" in fn_id else fn_id
+        candidates = [k for k in graph["functions"] if suffix in k]
+        if candidates:
+            click.echo("Similar fn_ids:", err=True)
+            for c in candidates[:5]:
+                click.echo(f"  {c}", err=True)
+        raise SystemExit(2)
+
+    # Source slice from line range — graph.json holds the boundaries already.
+    src_path = root_path / fn["file"]
+    if not src_path.exists():
+        click.echo(f"Source file missing: {src_path}", err=True)
+        raise SystemExit(2)
+    src_lines = src_path.read_text(encoding="utf-8").splitlines()
+    fn_source = "\n".join(src_lines[fn["line_start"] - 1: fn["line_end"]])
+
+    # Top 2 callers, signatures only — see prompts.py docstring for why
+    # bodies are deliberately excluded (cache-invalidation scope).
+    caller_ids: list[str] = []
+    for edge in graph.get("call_edges", []):
+        if edge["target_fn"] == fn_id and edge["source_fn"] not in caller_ids:
+            caller_ids.append(edge["source_fn"])
+            if len(caller_ids) >= 2:
+                break
+    caller_sigs: list[str] = []
+    for cid in caller_ids:
+        c = graph["functions"].get(cid)
+        if not c:
+            continue
+        params = ", ".join(p["name"] for p in c.get("params", []))
+        prefix = f"{c['class_name']}." if c.get("class_name") else ""
+        caller_sigs.append(f"def {prefix}{c['name']}({params})")
+
+    # Display name in prompt — qualified for methods.
+    display_name = (
+        f"{fn['class_name']}.{fn['name']}"
+        if fn.get("class_name") else fn["name"]
+    )
+
+    if dry_run:
+        prompt = format_function_prompt(
+            fn_source, fn["file"], display_name, callers=caller_sigs,
+        )
+        click.echo(prompt)
+        return
+
+    click.echo(f"Generating description for {fn_id}...", err=True)
+    desc = author_function_description(
+        fn_source=fn_source,
+        file_path=fn["file"],
+        fn_name=display_name,
+        callers=caller_sigs,
+        cwd=root_path,
+    )
+    if desc is None:
+        click.echo("Description generation failed — see logs above.", err=True)
+        raise SystemExit(1)
+
+    unit = {
+        "id": fn_id,
+        "kind": "function_unit",
+        "name": display_name,
+        "anchor": {
+            "file": fn["file"],
+            "fn": fn["name"],
+            **({"class": fn["class_name"]} if fn.get("class_name") else {}),
+        },
+        "source_hash": fn.get("ast_hash"),
+        "description": desc.description,
+        "hardcoded_artifacts": [a.model_dump(exclude_none=True)
+                                for a in desc.hardcoded_artifacts],
+    }
+    click.echo(_json.dumps(unit, ensure_ascii=False, indent=2))
+
+    if save:
+        # Lightweight merge until units_store.py (Phase 1.7) lands.
+        units_path = root_path / ".winkers" / "units.json"
+        existing = {"units": []}
+        if units_path.exists():
+            try:
+                existing = _json.loads(units_path.read_text(encoding="utf-8"))
+                existing.setdefault("units", [])
+            except Exception:
+                pass
+        existing["units"] = [u for u in existing["units"]
+                             if u.get("id") != fn_id]
+        existing["units"].append(unit)
+        units_path.write_text(
+            _json.dumps(existing, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        click.echo(f"Saved to {units_path}", err=True)
+
+
+# ---------------------------------------------------------------------------
+# describe-section — Phase 1 description-author CLI for template sections
+# ---------------------------------------------------------------------------
+
+@cli.command("describe-section")
+@click.argument("section_ref")
+@click.option("--root", "-r", default=".", type=click.Path(exists=True),
+              help="Project root")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print formatted prompt without invoking claude")
+@click.option("--save", is_flag=True, default=False,
+              help="Append/replace this unit in .winkers/units.json")
+def describe_section(section_ref: str, root: str, dry_run: bool, save: bool):
+    """Generate a description for one template section.
+
+    SECTION_REF format: "<template-path>#<section-id>"
+
+    \b
+    Example:
+      winkers describe-section templates/index.html#calc-sub-approach \\
+                              --root /path/to/project
+    """
+    import json as _json
+
+    from winkers.descriptions.author import author_template_description
+    from winkers.descriptions.prompts import format_template_section_prompt
+    from winkers.templates.scanner import scan_template, filter_leaves
+
+    if "#" not in section_ref:
+        click.echo(
+            "Section ref must be '<template-path>#<section-id>' "
+            "(e.g. 'templates/index.html#calc-sub-approach')",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    template_rel, section_id = section_ref.split("#", 1)
+    root_path = Path(root).resolve()
+    template_path = root_path / template_rel
+    if not template_path.exists():
+        click.echo(f"Template not found: {template_path}", err=True)
+        raise SystemExit(2)
+
+    sections = scan_template(template_path)
+    sec = next((s for s in sections if s.id == section_id), None)
+    if sec is None:
+        click.echo(f"Section #{section_id} not found in {template_rel}", err=True)
+        ids = sorted(s.id for s in filter_leaves(sections))
+        if ids:
+            click.echo("Available leaf section ids:", err=True)
+            for i in ids:
+                click.echo(f"  {i}", err=True)
+        raise SystemExit(2)
+
+    # Neighbor ids — gives the LLM orientation; keeps the prompt cheap by
+    # not including their content.
+    neighbors = [s.id for s in filter_leaves(sections) if s.id != section_id][:5]
+
+    if dry_run:
+        prompt = format_template_section_prompt(
+            section_html=sec.content,
+            file_path=template_rel,
+            section_id=section_id,
+            leading_comment=sec.leading_comment,
+            neighbor_section_ids=neighbors,
+        )
+        click.echo(prompt)
+        return
+
+    click.echo(f"Generating description for {section_ref}...", err=True)
+    desc = author_template_description(
+        section_html=sec.content,
+        file_path=template_rel,
+        section_id=section_id,
+        leading_comment=sec.leading_comment,
+        neighbor_section_ids=neighbors,
+        cwd=root_path,
+    )
+    if desc is None:
+        click.echo("Description generation failed — see logs above.", err=True)
+        raise SystemExit(1)
+
+    unit_id = f"template:{template_rel}#{section_id}"
+    unit = {
+        "id": unit_id,
+        "kind": "traceability_unit",
+        "name": f"Section #{section_id} ({template_rel})",
+        "source_files": [template_rel],
+        "source_anchors": [f"{template_rel}#{section_id}"],
+        "description": desc.description,
+        "hardcoded_artifacts": [a.model_dump(exclude_none=True)
+                                for a in desc.hardcoded_artifacts],
+    }
+    click.echo(_json.dumps(unit, ensure_ascii=False, indent=2))
+
+    if save:
+        units_path = root_path / ".winkers" / "units.json"
+        existing = {"units": []}
+        if units_path.exists():
+            try:
+                existing = _json.loads(units_path.read_text(encoding="utf-8"))
+                existing.setdefault("units", [])
+            except Exception:
+                pass
+        existing["units"] = [u for u in existing["units"]
+                             if u.get("id") != unit_id]
+        existing["units"].append(unit)
+        units_path.write_text(
+            _json.dumps(existing, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        click.echo(f"Saved to {units_path}", err=True)
+
+
+# ---------------------------------------------------------------------------
+# describe-data — Phase 1.10 description-author CLI for data files
+# ---------------------------------------------------------------------------
+
+@cli.command("describe-data")
+@click.argument("file_path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--root", "-r", default=".", type=click.Path(exists=True),
+              help="Project root (file path is relative to this)")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print formatted prompt without invoking claude")
+@click.option("--save", is_flag=True, default=False,
+              help="Append/replace this unit in .winkers/units.json")
+def describe_data(file_path: str, root: str, dry_run: bool, save: bool):
+    """Generate a description for one data file (JSON / YAML / TOML).
+
+    \b
+    Example:
+      winkers describe-data data/tespy_topology.json -r /path/to/project
+    """
+    import json as _json
+
+    from winkers.data_files.scanner import read_data_file
+    from winkers.descriptions.author import author_data_file_description
+    from winkers.descriptions.prompts import format_data_file_prompt
+    from winkers.descriptions.store import data_file_hash
+
+    root_path = Path(root).resolve()
+    fp = Path(file_path).resolve()
+    entry = read_data_file(fp, root_path)
+    if entry is None:
+        click.echo(
+            f"Cannot read or file too large: {fp} "
+            f"(size cap defined in winkers.data_files.scanner.MAX_FILE_BYTES)",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    if dry_run:
+        click.echo(format_data_file_prompt(entry.content, entry.rel_path))
+        return
+
+    click.echo(
+        f"Generating description for data:{entry.rel_path}...", err=True,
+    )
+    desc = author_data_file_description(
+        file_content=entry.content,
+        file_path=entry.rel_path,
+        cwd=root_path,
+    )
+    if desc is None:
+        click.echo("Description generation failed — see logs above.", err=True)
+        raise SystemExit(1)
+
+    unit_id = f"data:{entry.rel_path}"
+    unit = {
+        "id": unit_id,
+        "kind": "traceability_unit",
+        "name": f"Data file {entry.rel_path}",
+        "source_files": [entry.rel_path],
+        "source_anchors": [entry.rel_path],
+        "source_hash": data_file_hash(entry.content),
+        "description": desc.description,
+        "hardcoded_artifacts": [
+            a.model_dump(exclude_none=True)
+            for a in desc.hardcoded_artifacts
+        ],
+    }
+    click.echo(_json.dumps(unit, ensure_ascii=False, indent=2))
+
+    if save:
+        units_path = root_path / ".winkers" / "units.json"
+        existing = {"units": []}
+        if units_path.exists():
+            try:
+                existing = _json.loads(units_path.read_text(encoding="utf-8"))
+                existing.setdefault("units", [])
+            except Exception:
+                pass
+        existing["units"] = [u for u in existing["units"]
+                             if u.get("id") != unit_id]
+        existing["units"].append(unit)
+        units_path.write_text(
+            _json.dumps(existing, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        click.echo(f"Saved to {units_path}", err=True)
+
+
+# ---------------------------------------------------------------------------
+# couplings — detect cross-file couplings from hardcoded_artifacts
+# ---------------------------------------------------------------------------
+
+@cli.command("couplings")
+@click.option("--root", "-r", default=".", type=click.Path(exists=True),
+              help="Project root containing .winkers/units.json")
+@click.option("--save", is_flag=True, default=False,
+              help="Append detected couplings to .winkers/units.json as "
+                   "traceability_units (replaces existing auto-detected ones)")
+@click.option("--min-files", type=int, default=2,
+              help="Minimum distinct files for a cluster to qualify")
+@click.option("--min-hits", type=int, default=2,
+              help="Minimum total hits for a cluster")
+@click.option("--limit", type=int, default=30,
+              help="Maximum clusters to display")
+def couplings(root: str, save: bool, min_files: int, min_hits: int,
+              limit: int):
+    """Detect cross-file couplings from hardcoded_artifacts.
+
+    Reads .winkers/units.json (populated by `winkers describe-fn` /
+    `describe-section`), inverts the artifact lists into a value→units
+    map, and emits clusters where the same canonical value appears in
+    multiple files. Each cluster becomes a proposed traceability_unit.
+
+    \b
+    Workflow:
+      winkers describe-fn <fn_id> --save        # populate function units
+      winkers describe-section <ref> --save     # populate template units
+      winkers couplings                          # inspect couplings
+      winkers couplings --save                   # commit to units.json
+    """
+    import json as _json
+
+    from winkers.descriptions.aggregator import (
+        detect_couplings, proposed_to_unit,
+    )
+
+    root_path = Path(root).resolve()
+    units_path = root_path / ".winkers" / "units.json"
+    if not units_path.exists():
+        click.echo(
+            f"No units file at {units_path}. Run `winkers describe-fn` / "
+            f"`winkers describe-section --save` first.",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    data = _json.loads(units_path.read_text(encoding="utf-8"))
+    units = data.get("units", [])
+    # Detection runs only on units with artifacts; auto-detected coupling
+    # units (origin=auto-detected) are excluded so we don't bootstrap
+    # couplings from prior couplings.
+    candidate = [
+        u for u in units
+        if u.get("kind") in ("function_unit", "traceability_unit")
+        and u.get("hardcoded_artifacts")
+        and (u.get("meta") or {}).get("origin") != "auto-detected"
+    ]
+
+    click.echo(
+        f"Scanning {len(candidate)} units with hardcoded_artifacts "
+        f"(of {len(units)} total)...",
+        err=True,
+    )
+
+    clusters = detect_couplings(
+        candidate, min_hits=min_hits, min_files=min_files,
+    )
+
+    if not clusters:
+        click.echo("No cross-file couplings detected.")
+        return
+
+    click.echo(f"\n{len(clusters)} coupling cluster(s) found:\n")
+    for c in clusters[:limit]:
+        display = c.canonical_value
+        if len(display) > 50:
+            display = display[:47] + "..."
+        click.echo(
+            f"  [{c.primary_kind}]  {display!r}  "
+            f"— {c.file_count} files, {c.hit_count} hits, "
+            f"uniformity={c.kind_uniformity:.2f}"
+        )
+        for h in c.hits[:4]:
+            ctx = h.artifact.context[:60]
+            click.echo(f"      • {h.file:35s}  {h.unit_id:60s}  {ctx}")
+        if len(c.hits) > 4:
+            click.echo(f"      • ... and {len(c.hits) - 4} more")
+        click.echo()
+
+    if len(clusters) > limit:
+        click.echo(f"  ... {len(clusters) - limit} more cluster(s) "
+                   f"omitted (use --limit to show more)")
+
+    if save:
+        # Strip prior auto-detected couplings; replace with current set.
+        kept = [u for u in units
+                if (u.get("meta") or {}).get("origin") != "auto-detected"]
+        proposed_units = [proposed_to_unit(c) for c in clusters]
+        new_data = {"units": kept + proposed_units}
+        units_path.write_text(
+            _json.dumps(new_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        click.echo(
+            f"\nSaved {len(proposed_units)} traceability_units to "
+            f"{units_path} (replaced {len(units) - len(kept)} prior "
+            f"auto-detected entries)",
+            err=True,
+        )
 
 
 
