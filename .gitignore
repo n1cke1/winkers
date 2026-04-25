@@ -44,4 +44,12 @@ old/
 SESSION_*.md
 winkers_*.md
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .mcp.json
+
+# Spike / dev-time artifacts under scripts/
+scripts/_*.log
+scripts/embeddings.npz
+scripts/units.json
+scripts/winkers_artifacts.tar.gz
+scripts/_sandbox*

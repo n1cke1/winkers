@@ -103,17 +103,15 @@ def test_graph_hash_changes(tmp_path):
 
 # --- SemanticEnricher ---
 
-def _mock_anthropic():
-    mock_mod = MagicMock()
-    mock_client = MagicMock()
-    mock_mod.Anthropic.return_value = mock_client
-    return mock_mod, mock_client
+# After migration to `claude --print` subprocess (subscription auth), tests
+# mock `winkers.semantic._run_claude_print` to return canned JSON instead
+# of mocking the anthropic SDK. The SDK is no longer imported.
 
-
-def _make_response(text: str):
-    resp = MagicMock()
-    resp.content = [MagicMock(text=text)]
-    return resp
+def _mock_subprocess_call(stdout: str):
+    """Return a function compatible with `_run_claude_print`'s signature."""
+    def _fake(prompt: str) -> tuple[str, int]:
+        return stdout, 0
+    return _fake
 
 
 SAMPLE_API_RESPONSE = json.dumps({
@@ -151,8 +149,8 @@ SAMPLE_API_RESPONSE = json.dumps({
 })
 
 
-@patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
-def test_enricher_enrich(tmp_path):
+def test_enricher_enrich(tmp_path, monkeypatch):
+    from winkers import semantic
     from winkers.graph import GraphBuilder
 
     (tmp_path / "calc.py").write_text(
@@ -160,13 +158,13 @@ def test_enricher_enrich(tmp_path):
     )
     graph = GraphBuilder().build(tmp_path)
 
-    mock_mod, mock_client = _mock_anthropic()
-    mock_client.messages.create.return_value = _make_response(SAMPLE_API_RESPONSE)
+    monkeypatch.setattr(
+        semantic, "_run_claude_print",
+        _mock_subprocess_call(SAMPLE_API_RESPONSE),
+    )
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        enricher = SemanticEnricher(api_key="test-key")
-        enricher._client = mock_client
-        result = enricher.enrich(graph, tmp_path)
+    enricher = SemanticEnricher()
+    result = enricher.enrich(graph, tmp_path)
 
     assert isinstance(result, EnrichResult)
     assert result.layer.data_flow == "Input -> calc -> output."
@@ -176,12 +174,11 @@ def test_enricher_enrich(tmp_path):
     assert result.rules_audit.add[0].affects == ["calc.py"]
     assert len(result.layer.new_feature_checklist) == 2
     assert "graph_hash" in result.layer.meta
-    mock_client.messages.create.assert_called_once()
 
 
-@patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
-def test_enricher_proposed_rules_filtered(tmp_path):
+def test_enricher_proposed_rules_filtered(tmp_path, monkeypatch):
     """Rules without title or content are dropped."""
+    from winkers import semantic
     from winkers.graph import GraphBuilder
 
     (tmp_path / "calc.py").write_text("def add(a, b):\n    return a+b\n")
@@ -201,19 +198,18 @@ def test_enricher_proposed_rules_filtered(tmp_path):
         "new_feature_checklist": [],
     })
 
-    mock_mod, mock_client = _mock_anthropic()
-    mock_client.messages.create.return_value = _make_response(bad_response)
+    monkeypatch.setattr(
+        semantic, "_run_claude_print",
+        _mock_subprocess_call(bad_response),
+    )
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        enricher = SemanticEnricher(api_key="test-key")
-        enricher._client = mock_client
-        result = enricher.enrich(graph, tmp_path)
+    enricher = SemanticEnricher()
+    result = enricher.enrich(graph, tmp_path)
 
     assert len(result.rules_audit.add) == 1
     assert result.rules_audit.add[0].title == "good"
 
 
-@patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
 def test_enricher_is_stale(tmp_path):
     from winkers.graph import GraphBuilder
 
@@ -221,9 +217,7 @@ def test_enricher_is_stale(tmp_path):
     f.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
     graph = GraphBuilder().build(tmp_path)
 
-    mock_mod, _ = _mock_anthropic()
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        enricher = SemanticEnricher(api_key="test-key")
+    enricher = SemanticEnricher()
 
     layer = SemanticLayer(meta={"graph_hash": _graph_hash(graph, tmp_path)})
     assert not enricher.is_stale(graph, tmp_path, layer)
@@ -232,8 +226,9 @@ def test_enricher_is_stale(tmp_path):
     assert enricher.is_stale(graph, tmp_path, layer)
 
 
-@patch.dict("sys.modules", {"anthropic": _mock_anthropic()[0]})
-def test_enricher_api_error(tmp_path):
+def test_enricher_subprocess_error(tmp_path, monkeypatch):
+    """Subprocess failure surfaces as RuntimeError."""
+    from winkers import semantic
     from winkers.graph import GraphBuilder
 
     (tmp_path / "calc.py").write_text(
@@ -241,14 +236,32 @@ def test_enricher_api_error(tmp_path):
     )
     graph = GraphBuilder().build(tmp_path)
 
-    mock_mod, mock_client = _mock_anthropic()
-    mock_client.messages.create.side_effect = Exception("API down")
+    def fail(prompt):
+        raise RuntimeError("claude --print exploded")
 
-    with patch.dict("sys.modules", {"anthropic": mock_mod}):
-        enricher = SemanticEnricher(api_key="test-key")
-        enricher._client = mock_client
-        with pytest.raises(RuntimeError, match="Semantic enrichment failed"):
-            enricher.enrich(graph, tmp_path)
+    monkeypatch.setattr(semantic, "_run_claude_print", fail)
+
+    enricher = SemanticEnricher()
+    with pytest.raises(RuntimeError, match="Semantic enrichment failed"):
+        enricher.enrich(graph, tmp_path)
+
+
+def test_enricher_empty_subprocess_output(tmp_path, monkeypatch):
+    """Empty stdout from subprocess → RuntimeError after retries."""
+    from winkers import semantic
+    from winkers.graph import GraphBuilder
+
+    (tmp_path / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+    graph = GraphBuilder().build(tmp_path)
+
+    monkeypatch.setattr(semantic, "_run_claude_print",
+                        _mock_subprocess_call(""))
+
+    enricher = SemanticEnricher()
+    with pytest.raises(RuntimeError, match="Semantic enrichment failed"):
+        enricher.enrich(graph, tmp_path)
 
 
 # --- CLI integration ---

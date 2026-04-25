@@ -8,6 +8,13 @@ class JavaScriptProfile(LanguageProfile):
     extensions = [".js", ".jsx", ".mjs", ".cjs"]
     tree_sitter_language = "javascript"
 
+    # Note on arrow_function: tree-sitter-javascript uses two different field
+    # names depending on form. `(x) => ...` and `(a, b) => ...` use the
+    # `parameters` field with `formal_parameters` value, while bare-identifier
+    # `x => ...` uses the SINGULAR `parameter` field with `identifier` value.
+    # Combining these into one pattern via [(identifier) (formal_parameters)]
+    # is rejected by the grammar — must be two patterns. Bodies can be any
+    # expression or statement_block, so `(_)` covers both.
     function_query = """
     [
       (function_declaration
@@ -21,8 +28,12 @@ class JavaScriptProfile(LanguageProfile):
         body: (statement_block) @fn.body) @fn.def
 
       (arrow_function
-        parameters: [(identifier) (formal_parameters)] @fn.params
-        body: [(_) (statement_block)] @fn.body) @fn.def
+        parameters: (formal_parameters) @fn.params
+        body: (_) @fn.body) @fn.def
+
+      (arrow_function
+        parameter: (identifier) @fn.params
+        body: (_) @fn.body) @fn.def
     ]
     """
 
@@ -36,9 +47,13 @@ class JavaScriptProfile(LanguageProfile):
       ])
     """
 
+    # Note: tree-sitter-javascript names the ES module import node
+    # `import_statement`, not `import_declaration`. The latter is a Python
+    # tree-sitter convention. Source field on `import_statement` holds the
+    # module string for `import x from 'foo'` / `import 'foo'`.
     import_query = """
     [
-      (import_declaration
+      (import_statement
         source: (string) @imp.source)
       (call_expression
         function: (identifier) @require.fn

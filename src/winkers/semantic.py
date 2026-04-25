@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 from winkers.conventions import (
     DismissedFile,
@@ -411,6 +418,45 @@ def _format_dismissed(dismissed: DismissedFile) -> str:
     return "\n".join(lines)
 
 
+def _extract_json_object(text: str) -> str | None:
+    """Return the first balanced top-level JSON object substring.
+
+    Tolerates markdown fences and preamble that LLMs sometimes emit
+    before/after the structured response.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:]
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _parse_rules_audit(raw: dict) -> RulesAudit:
     add = [
         RuleAdd(
@@ -447,31 +493,91 @@ def _parse_rules_audit(raw: dict) -> RulesAudit:
 # Enricher
 # ---------------------------------------------------------------------------
 
+
 def _build_http_client():
-    """Build httpx client. SSL verify off by default (corporate proxy compat)."""
+    """Build httpx client for SDK callers (kept for backward-compat).
+
+    `analyzer.py` and other modules that still use the anthropic SDK
+    import this. SemanticEnricher itself no longer uses it (migrated
+    to `claude --print` subprocess).
+    """
     if os.environ.get("WINKERS_SSL_VERIFY", "0").lower() in ("1", "true", "yes"):
         return None  # use default httpx with SSL verification
-    import httpx
-    return httpx.Client(verify=False)
+    try:
+        import httpx
+        return httpx.Client(verify=False)
+    except ImportError:
+        return None
+
+
+def _resolve_claude_bin() -> str:
+    """Pick the Claude CLI executable. Prefer Windows .cmd shim."""
+    if sys.platform == "win32":
+        cmd = shutil.which("claude.cmd")
+        if cmd:
+            return cmd
+    return shutil.which("claude") or "claude"
+
+
+_CLAUDE_BIN = _resolve_claude_bin()
+_SUBPROCESS_TIMEOUT = 600  # large project + Sonnet response can be slow
+
+
+def _run_claude_print(prompt: str) -> tuple[str, int]:
+    """Spawn `claude --print` with prompt on stdin, return (stdout, returncode).
+
+    Same pattern as `winkers/descriptions/author.py` and
+    `winkers/audit/runner.py` — subscription auth, cwd=tmp to dodge
+    project hooks, stdin (avoids Windows .cmd shim quoting issues).
+
+    No --allowedTools restriction here: semantic enrichment may benefit
+    from the LLM looking at additional files if it judges them relevant.
+    Read-only is the natural mode (no edit tools needed).
+    """
+    cmd = [_CLAUDE_BIN, "--print", "--allowedTools", "Read,Grep,Glob"]
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    tmp_cwd = tempfile.gettempdir()
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True, text=True,
+            timeout=_SUBPROCESS_TIMEOUT,
+            encoding="utf-8", errors="replace",
+            cwd=tmp_cwd, env=env,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"semantic enrichment claude --print timed out after "
+            f"{_SUBPROCESS_TIMEOUT}s"
+        ) from e
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"claude CLI not found at {_CLAUDE_BIN!r}. Install Claude Code "
+            f"or set PATH so `claude` resolves."
+        ) from e
+    return (result.stdout or "").strip(), result.returncode
 
 
 class SemanticEnricher:
+    """Generate the project-level semantic layer via subscription-auth Claude.
+
+    Migrated from the `anthropic` SDK to a `claude --print` subprocess
+    call. Uses the user's Claude Code subscription auth — no API key
+    required. Subscription rate-limit and retry handled by the CLI; we
+    apply a single retry on parse failure (LLM occasionally wraps JSON
+    in unexpected preamble).
+    """
+
     def __init__(self, api_key: str | None = None) -> None:
-        try:
-            import anthropic
-        except ImportError:
-            raise ImportError(
-                "Semantic enrichment requires the 'anthropic' package. "
-                "Install with: pip install anthropic"
+        # `api_key` is accepted for backward-compat with existing callers
+        # but ignored — subscription auth via the Claude CLI replaces it.
+        if api_key is not None:
+            log.debug(
+                "SemanticEnricher api_key argument ignored — using "
+                "subscription auth via `claude --print`."
             )
-        http_client = _build_http_client()
-        kwargs: dict[str, Any] = {}
-        if api_key:
-            kwargs["api_key"] = api_key
-        if http_client:
-            kwargs["http_client"] = http_client
-        self._client = anthropic.Anthropic(**kwargs)
-        self._model = os.environ.get("WINKERS_MODEL", DEFAULT_MODEL)
 
     def enrich(
         self, graph: Graph, root: Path,
@@ -480,7 +586,14 @@ class SemanticEnricher:
         detector_evidence: list[ProposedRule] | None = None,
         dismissed: DismissedFile | None = None,
     ) -> EnrichResult:
-        """One API call -- send project code + rules context, get semantic layer + audit back."""
+        """One subprocess call — system+user prompts merged on stdin.
+
+        `claude --print` accepts a single prompt (no separate system),
+        so the system instructions are prepended to the user content
+        with a clear separator. Output is JSON; we tolerate markdown
+        fences and arbitrary preamble (LLM occasionally explains
+        before emitting the object).
+        """
         project_text = _build_project_summary(graph, root)
 
         user_msg = "Here is the project:\n" + project_text
@@ -512,71 +625,59 @@ class SemanticEnricher:
 
         user_msg += "\n\n---\n\nJSON schema:\n" + SCHEMA_TEXT
 
+        # Compose into a single prompt — system instructions first.
+        full_prompt = SYSTEM_PROMPT + "\n\n---\n\n" + user_msg
+
         _start = time.monotonic()
-        models = [self._model]
-        if self._model != FALLBACK_MODEL:
-            models.append(FALLBACK_MODEL)
+        text = ""
+        last_error: Exception | None = None
 
-        last_error = None
-        used_model = self._model
-        response = None
+        for attempt in range(2):
+            try:
+                stdout, rc = _run_claude_print(full_prompt)
+            except Exception as e:
+                last_error = e
+                continue
+            if not stdout:
+                last_error = RuntimeError(
+                    f"claude --print returned empty output (exit={rc})"
+                )
+                continue
+            text = stdout
+            last_error = None
+            break
 
-        for model in models:
-            for attempt in range(3):
-                try:
-                    response = self._client.messages.create(
-                        model=model,
-                        max_tokens=4096,
-                        system=SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": user_msg}],
-                    )
-                    used_model = model
-                    last_error = None
-                    break
-                except Exception as e:
-                    last_error = e
-                    err_str = str(e)
-                    if "529" in err_str or "overloaded" in err_str.lower():
-                        wait = (attempt + 1) * 5
-                        time.sleep(wait)
-                        continue
-                    raise RuntimeError(
-                        f"Semantic enrichment failed: {e}"
-                    ) from e
-            if response is not None:
-                break
-
-        if response is None:
+        if not text:
             raise RuntimeError(
-                f"Semantic enrichment failed after retries: {last_error}"
-            )
+                f"Semantic enrichment failed: {last_error}"
+            ) from last_error
 
         try:
-            text = response.content[0].text
-            if text.strip().startswith("```"):
-                text = text.strip().split("\n", 1)[-1]
-                text = text.rsplit("```", 1)[0].strip()
-            parsed = json.loads(text)
+            parsed_text = _extract_json_object(text)
+            if parsed_text is None:
+                raise ValueError("no JSON object in response")
+            parsed = json.loads(parsed_text)
             # Extract rules_audit before validating SemanticLayer
             raw_audit = parsed.pop("rules_audit", {})
             layer = SemanticLayer.model_validate(parsed)
             rules_audit = _parse_rules_audit(raw_audit)
         except Exception as e:
-            raise RuntimeError(f"Semantic enrichment failed: {e}") from e
+            raise RuntimeError(
+                f"Semantic enrichment failed: {e} (first 200c: {text[:200]!r})"
+            ) from e
 
         # Persist the targets the LLM was grounded on. These are graph-verified
         # fn_ids — agents can pass them directly to `scope` without re-parsing
         # the narrative or guessing.
         layer.data_flow_targets = [fn.id for fn in data_flow_targets]
 
-        usage = getattr(response, "usage", None)
         elapsed = time.monotonic() - _start
         layer.meta = {
             "schema_version": "2",
-            "model": used_model,
+            "model": "claude-cli-subscription",  # exact model unknown via CLI
             "graph_hash": _graph_hash(graph, root),
-            "input_tokens": getattr(usage, "input_tokens", 0),
-            "output_tokens": getattr(usage, "output_tokens", 0),
+            "input_tokens": 0,   # not surfaced by claude --print
+            "output_tokens": 0,
             "duration_s": round(elapsed, 1),
         }
         return EnrichResult(layer=layer, rules_audit=rules_audit)
