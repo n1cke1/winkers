@@ -159,8 +159,12 @@ def test_skips_malformed_artifacts():
 def test_proposed_to_unit_has_stable_id():
     """Same input → same id (id is sha256-based, deterministic)."""
     units = [
-        _fn_unit("a.py", "f1", [{"value": "42", "kind": "count", "context": "x", "surface": "42 cases"}]),
-        _fn_unit("b.py", "f2", [{"value": "42", "kind": "count", "context": "y", "surface": "42 cases"}]),
+        _fn_unit("a.py", "f1", [
+            {"value": "42", "kind": "count", "context": "x", "surface": "42 cases"},
+        ]),
+        _fn_unit("b.py", "f2", [
+            {"value": "42", "kind": "count", "context": "y", "surface": "42 cases"},
+        ]),
     ]
     clusters = detect_couplings(units)
     u1 = proposed_to_unit(clusters[0])
@@ -233,8 +237,12 @@ def test_id_list_with_one_short_name_kept():
 def test_proposed_to_unit_schema():
     """Output has the expected traceability_unit shape."""
     units = [
-        _fn_unit("a.py", "f1", [{"value": "42", "kind": "count", "context": "x", "surface": "42 cases"}]),
-        _fn_unit("b.py", "f2", [{"value": "42", "kind": "count", "context": "y", "surface": "42 cases"}]),
+        _fn_unit("a.py", "f1", [
+            {"value": "42", "kind": "count", "context": "x", "surface": "42 cases"},
+        ]),
+        _fn_unit("b.py", "f2", [
+            {"value": "42", "kind": "count", "context": "y", "surface": "42 cases"},
+        ]),
     ]
     out = proposed_to_unit(detect_couplings(units)[0])
     assert out["kind"] == "traceability_unit"

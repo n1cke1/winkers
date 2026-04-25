@@ -2072,7 +2072,9 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
 
     from winkers.descriptions.store import UnitsStore
     from winkers.embeddings import (
-        INDEX_FILENAME, load_index, search,
+        INDEX_FILENAME,
+        load_index,
+        search,
     )
 
     idx_path = root / ".winkers" / INDEX_FILENAME
@@ -2100,7 +2102,10 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
             "matches": [],
             "max_score": 0.0,
             "verdict": "EMPTY",
-            "advice": "No vectors in index — rebuild via `winkers init --with-units --force-units`.",
+            "advice": (
+                "No vectors in index — rebuild via "
+                "`winkers init --with-units --force-units`."
+            ),
         }
 
     top_score = raw[0][0]

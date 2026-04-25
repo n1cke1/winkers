@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
-from pathlib import Path
-
-import pytest
 
 from winkers.hooks.prompt_enrich import (
     EMPTY_PENDING_MARKER,
@@ -16,7 +12,6 @@ from winkers.hooks.session_start import (
     clear_baseline,
     read_baseline,
 )
-
 
 # ---------------------------------------------------------------------------
 # session_start

@@ -1,7 +1,6 @@
 """Tests for winkers.embeddings.builder — incremental encoding + search."""
 
 import hashlib
-from pathlib import Path
 
 import numpy as np
 import pytest

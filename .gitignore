@@ -53,3 +53,5 @@ scripts/embeddings.npz
 scripts/units.json
 scripts/winkers_artifacts.tar.gz
 scripts/_sandbox*
+scripts/vps_*.py
+ui_traceability.json

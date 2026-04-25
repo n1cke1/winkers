@@ -17,8 +17,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-log = logging.getLogger(__name__)
-
 from winkers.conventions import (
     DismissedFile,
     ProposedRule,
@@ -29,6 +27,8 @@ from winkers.conventions import (
 )
 from winkers.models import Graph
 from winkers.store import STORE_DIR
+
+log = logging.getLogger(__name__)
 
 SEMANTIC_FILE = "semantic.json"
 DEFAULT_MODEL = "claude-sonnet-4-20250514"

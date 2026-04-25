@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import numpy as np
@@ -13,13 +12,15 @@ import winkers.embeddings.builder as eb
 import winkers.mcp.tools as tools_mod
 from winkers.descriptions.store import UnitsStore
 from winkers.embeddings.builder import (
-    EmbeddingIndex,
     INDEX_FILENAME,
     embed_units,
     save_index,
 )
 from winkers.models import (
-    FileNode, FunctionNode, Graph, Param,
+    FileNode,
+    FunctionNode,
+    Graph,
+    Param,
 )
 
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from winkers.data_files.scanner import (
     MAX_FILE_BYTES,
     discover_data_files,

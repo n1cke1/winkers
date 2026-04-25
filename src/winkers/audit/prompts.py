@@ -12,11 +12,9 @@ preserved as-is.
 
 from __future__ import annotations
 
-import json
 from textwrap import dedent
 
 from winkers.audit.selector import AuditPacket
-
 
 _AUDIT_INSTRUCTIONS = dedent("""
     You are auditing code changes for CROSS-FILE COHERENCE DRIFT.
