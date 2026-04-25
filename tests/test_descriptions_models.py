@@ -3,11 +3,9 @@
 import json
 
 from winkers.descriptions.models import (
-    Description,
     HardcodedArtifact,
     parse_description_response,
 )
-
 
 # ---------------------------------------------------------------------------
 # Parser tolerance

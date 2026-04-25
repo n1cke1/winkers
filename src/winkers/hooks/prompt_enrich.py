@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Patterns that indicate creation intent
@@ -62,7 +62,7 @@ def _consume_pending(root: Path) -> str | None:
         history_dir.mkdir(parents=True, exist_ok=True)
         # Microsecond suffix so two SessionStarts within the same second
         # don't overwrite each other (rare in prod, common in tests).
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
         archive = history_dir / f"pending_{ts}.md"
         archive.write_text(content, encoding="utf-8")
         pending_path.unlink(missing_ok=True)

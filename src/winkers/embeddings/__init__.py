@@ -13,9 +13,9 @@ re-init cheap on subsequent runs.
 
 from winkers.embeddings.builder import (
     DIMENSION,
-    EmbeddingIndex,
     INDEX_FILENAME,
     MODEL_NAME,
+    EmbeddingIndex,
     embed_units,
     load_index,
     save_index,

@@ -82,10 +82,12 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
     Returns a stats dict for the caller's progress report.
     """
     from winkers.data_files.scanner import (
-        discover_data_files, read_data_file,
+        discover_data_files,
+        read_data_file,
     )
     from winkers.descriptions.aggregator import (
-        detect_couplings, proposed_to_unit,
+        detect_couplings,
+        proposed_to_unit,
     )
     from winkers.descriptions.author import (
         author_data_file_description,
@@ -93,10 +95,15 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
         author_template_description,
     )
     from winkers.descriptions.store import (
-        UnitsStore, data_file_hash, section_hash,
+        UnitsStore,
+        data_file_hash,
+        section_hash,
     )
     from winkers.embeddings import (
-        embed_units, load_index, save_index, INDEX_FILENAME,
+        INDEX_FILENAME,
+        embed_units,
+        load_index,
+        save_index,
     )
     from winkers.templates.scanner import scan_project
 
@@ -2772,7 +2779,6 @@ def hook_stop_audit_spawn(path: str):
     """
     import subprocess
     import sys
-    import os
 
     root = Path(path).resolve()
     # Path to our own CLI — same one currently executing.
@@ -3099,7 +3105,7 @@ def describe_section(section_ref: str, root: str, dry_run: bool, save: bool):
 
     from winkers.descriptions.author import author_template_description
     from winkers.descriptions.prompts import format_template_section_prompt
-    from winkers.templates.scanner import scan_template, filter_leaves
+    from winkers.templates.scanner import filter_leaves, scan_template
 
     if "#" not in section_ref:
         click.echo(
@@ -3310,7 +3316,8 @@ def couplings(root: str, save: bool, min_files: int, min_hits: int,
     import json as _json
 
     from winkers.descriptions.aggregator import (
-        detect_couplings, proposed_to_unit,
+        detect_couplings,
+        proposed_to_unit,
     )
 
     root_path = Path(root).resolve()

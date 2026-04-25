@@ -14,9 +14,9 @@ This closes the loop: Phase 1 builds the index, Phase 2 searches it,
 Phase 3 audits coherence between sessions.
 """
 
-from winkers.audit.selector import AuditPacket, build_packet, compute_changed_files
 from winkers.audit.prompts import format_audit_prompt
 from winkers.audit.runner import run_audit
+from winkers.audit.selector import AuditPacket, build_packet, compute_changed_files
 
 __all__ = [
     "AuditPacket",

@@ -20,7 +20,7 @@ detaching it so SessionEnd doesn't block on the ~30s LLM call.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from winkers.audit.prompts import empty_pending_marker, format_audit_prompt
@@ -77,7 +77,7 @@ def run(root: Path) -> None:
         meta={
             "base_commit": base_commit or "",
             "head_commit": head_commit,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(UTC).isoformat(),
         },
     )
 

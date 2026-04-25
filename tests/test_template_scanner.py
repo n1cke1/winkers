@@ -3,8 +3,6 @@
 from pathlib import Path
 from textwrap import dedent
 
-import pytest
-
 from winkers.templates.scanner import (
     discover_templates,
     filter_leaves,
