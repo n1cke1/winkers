@@ -58,6 +58,22 @@ Issues = "https://github.com/n1cke1/winkers/issues"
 [project.scripts]
 winkers = "winkers.cli.main:cli"
 
+# Pin torch to the CPU-only PyPI index for non-macOS hosts. Default PyPI
+# torch wheels pull ~5 GiB of nvidia-* CUDA dependencies, which winkers
+# never uses (BGE-M3 inference is CPU-only by design — see embeddings/
+# builder.py). macOS torch wheels are CPU/MPS, so we leave them on the
+# default index. Only honored by uv (uvx, uv pip); plain pip ignores
+# this — see the README install section.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "platform_system != 'Darwin'" },
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/winkers"]
 
