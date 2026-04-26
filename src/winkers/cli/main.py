@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1155,19 +1156,49 @@ def _templates_dir() -> Path:
     return Path(__file__).parent.parent / "templates"
 
 
-def _install_claude_code(root: Path) -> None:
+def _winkers_bin() -> str:
+    """Resolve an absolute path to the winkers binary for hooks/MCP configs.
+
+    Priority: active venv → sys.argv[0] → PATH → bare name. The first three
+    yield an absolute path; the bare-name fallback is reserved for unusual
+    environments where neither sys.argv[0] nor PATH lookup work.
+
+    Why absolute matters: hook commands and `.mcp.json:command` are run by
+    Claude Code in subprocess contexts (systemd services, headless ticket
+    runners) whose PATH often lacks the venv's bin/ — so a bare "winkers"
+    silently fails. Confirmed in tespy's prod runner on 2026-04-26.
+    """
     import shutil as _shutil
 
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        for candidate in (Path(venv) / "bin" / "winkers", Path(venv) / "Scripts" / "winkers.exe"):
+            if candidate.exists():
+                return str(candidate)
+    if sys.argv and sys.argv[0]:
+        argv0 = Path(sys.argv[0])
+        if argv0.is_absolute() and argv0.exists():
+            return str(argv0)
+    via_path = _shutil.which("winkers")
+    if via_path:
+        return via_path
+    return "winkers"
+
+
+def _install_claude_code(root: Path) -> None:
     # --- Project-level .mcp.json ---
-    # Use absolute path so the MCP server finds the project
-    # regardless of the working directory Claude Code launches from.
+    # Absolute root so the MCP server finds the project regardless of
+    # the working directory Claude Code launches from. Absolute command
+    # so headless/subprocess contexts with stripped-down PATH (systemd
+    # services, ticket runners) can actually invoke winkers.
     mcp_json = root / ".mcp.json"
     root_posix = str(root).replace("\\", "/")
+    winkers_bin = _winkers_bin().replace("\\", "/")
     mcp_config = {
         "mcpServers": {
             "winkers": {
-                "command": "uvx",
-                "args": ["winkers", "serve", root_posix],
+                "command": winkers_bin,
+                "args": ["serve", root_posix],
                 "type": "stdio",
             }
         }
@@ -1175,17 +1206,26 @@ def _install_claude_code(root: Path) -> None:
     mcp_json.write_text(json.dumps(mcp_config, indent=2) + "\n", encoding="utf-8")
     click.echo(f"  [ok] MCP server registered (project): {mcp_json}")
 
-    # --- Clean up old user-scope registration if present ---
-    _remove_user_scope_mcp()
+    # --- Migrate user-scope entry in ~/.claude.json (if present) ---
+    # Old behaviour was to *delete* the user-scope entry on every init. That
+    # silently broke `claude --print` headless workflows (ticket runners,
+    # scheduled agents) which skip the project-trust dialog and therefore
+    # never see project-scope MCP. Now we keep an existing entry and just
+    # refresh its command/args to the current binary + this root.
+    _migrate_user_scope_mcp(root, winkers_bin, root_posix)
 
-    winkers_bin = _shutil.which("winkers") or "winkers"
     _install_session_hook(root, winkers_bin)
     _install_claude_md_snippet(root)
     _install_winkers_pointer(root)
 
 
-def _remove_user_scope_mcp() -> None:
-    """Remove stale winkers entry from ~/.claude.json (migrated to .mcp.json)."""
+def _migrate_user_scope_mcp(root: Path, winkers_bin: str, root_posix: str) -> None:
+    """Refresh — but never delete — the user-scope winkers MCP entry.
+
+    Safe to call when no entry exists: it just no-ops. When an entry exists
+    pointing at a stale path or the wrong project, update the command/args
+    to the current binary + this root so `claude --print` keeps working.
+    """
     claude_json = Path.home() / ".claude.json"
     if not claude_json.exists():
         return
@@ -1193,14 +1233,21 @@ def _remove_user_scope_mcp() -> None:
         settings = json.loads(claude_json.read_text(encoding="utf-8"))
     except Exception:
         return
-    servers = settings.get("mcpServers", {})
-    if "winkers" not in servers:
+    entry = (settings.get("mcpServers") or {}).get("winkers")
+    if not entry:
         return
-    del servers["winkers"]
-    if not servers:
-        settings.pop("mcpServers", None)
+    desired = {
+        "type": "stdio",
+        "command": winkers_bin,
+        "args": ["serve", root_posix],
+    }
+    # Preserve any extra keys the user added (env, headers, etc.).
+    merged = {**entry, **desired}
+    if merged == entry:
+        return
+    settings.setdefault("mcpServers", {})["winkers"] = merged
     claude_json.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    click.echo(f"  [ok] Removed old user-scope MCP entry from {claude_json}")
+    click.echo(f"  [ok] Refreshed user-scope winkers MCP in {claude_json}")
 
 
 WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
