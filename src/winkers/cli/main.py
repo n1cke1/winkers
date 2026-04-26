@@ -1206,50 +1206,101 @@ def _remove_user_scope_mcp() -> None:
 WINKERS_TOOLS_PERMISSION = "mcp__winkers__*"
 
 
+_SNIPPET_HEADING = "## Architectural context (Winkers)"
+_SNIPPET_END_MARKER = "<!-- winkers-snippet-end -->"
+_SNIPPET_VERSION_RE = re.compile(r"^<!-- winkers-snippet-version: [^>]+ -->\n", re.MULTILINE)
+
+
+def _strip_winkers_snippet(text: str) -> str:
+    """Remove every prior Winkers snippet from CLAUDE.md, idempotently.
+
+    Two block shapes are stripped:
+
+    1. **New format** — bracketed by `<!-- winkers-snippet-version: X -->`
+       and `<!-- winkers-snippet-end -->`. Stripped by markers, so user
+       content right after the closing marker is preserved.
+    2. **Legacy format** — one or more stacked version stamps followed
+       by `## Architectural context (Winkers)` and content through the
+       next `## ` heading or EOF. Older releases left these around,
+       sometimes with multiple stacked stamps (Issue #2 in the
+       2026-04-26 invoicekit feedback). The bleed risk only matters for
+       stale legacy installs without an end marker; new installs pin the
+       boundary explicitly.
+
+    Orphan version stamps and a standalone heading-without-stamp are also
+    swept so the file ends up with no winkers traces before re-insertion.
+    """
+    new_re = re.compile(
+        r"<!-- winkers-snippet-version: [^>]+ -->\n"
+        r".*?"
+        + re.escape(_SNIPPET_END_MARKER)
+        + r"\n?",
+        re.DOTALL,
+    )
+    text = new_re.sub("", text)
+
+    legacy_re = re.compile(
+        r"(?:^<!-- winkers-snippet-version: [^>]+ -->\n)+"
+        + re.escape(_SNIPPET_HEADING)
+        + r".*?(?=^## |\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    text = legacy_re.sub("", text)
+
+    text = _SNIPPET_VERSION_RE.sub("", text)
+
+    standalone_re = re.compile(
+        r"^" + re.escape(_SNIPPET_HEADING) + r".*?(?=^## |\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    text = standalone_re.sub("", text)
+
+    # Strips can leave 3+ consecutive newlines where the block used to
+    # sit; collapse so re-runs land on the same byte-for-byte output.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
 def _install_claude_md_snippet(root: Path) -> None:
-    """Append (or update) Winkers MCP usage instructions in CLAUDE.md."""
+    """Append (or update) Winkers MCP usage instructions in CLAUDE.md.
+
+    Strips any prior snippet — including stacked-version-stamp duplicates
+    older releases used to leave behind — and inserts the canonical block
+    fresh, bracketed by an end marker so subsequent strips have a hard
+    boundary. Idempotent: skips the write when output matches existing.
+    """
     claude_md = root / "CLAUDE.md"
     snippet = (_templates_dir() / "claude_code" / "claude_md_snippet.md").read_text(
         encoding="utf-8"
     )
-    marker = "## Architectural context (Winkers)"
-    version_pattern = re.compile(r"<!-- winkers-snippet-version: ([\d.]+) -->")
+    block = snippet.rstrip() + "\n" + _SNIPPET_END_MARKER + "\n"
 
-    if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
-        if marker in existing:
-            m = version_pattern.search(existing)
-            if m and m.group(1) == __version__:
-                click.echo("  [ok] CLAUDE.md Winkers section is up to date.")
-                return
-            # Replace the old snippet block with the new one
-            start = existing.index(marker)
-            # version comment sits on the line before the marker
-            comment_start = existing.rfind("\n", 0, start)
-            block_start = (comment_start + 1) if comment_start != -1 else start
-            rest = existing[start + len(marker):]
-            next_heading = re.search(r"\n## ", rest)
-            if next_heading:
-                end = start + len(marker) + next_heading.start()
-                updated = existing[:block_start] + snippet + "\n" + existing[end + 1:]
-            else:
-                updated = existing[:block_start] + snippet
-            claude_md.write_text(updated.rstrip() + "\n", encoding="utf-8")
-            click.echo(f"  [ok] Updated Winkers section in CLAUDE.md to v{__version__}.")
-            return
-        # Insert after first heading (# Title) so agent reads it early.
-        # Fall back to prepending if no heading found.
-        first_h1 = re.search(r"^# .+\n", existing, re.MULTILINE)
-        if first_h1:
-            insert_at = first_h1.end()
-            updated = existing[:insert_at] + "\n" + snippet + "\n" + existing[insert_at:]
-        else:
-            updated = snippet + "\n\n" + existing
-        claude_md.write_text(updated.rstrip() + "\n", encoding="utf-8")
+    if not claude_md.exists():
+        claude_md.write_text(block, encoding="utf-8")
+        click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
+        return
+
+    existing = claude_md.read_text(encoding="utf-8")
+    had_snippet = _SNIPPET_HEADING in existing or _SNIPPET_END_MARKER in existing
+    cleaned = _strip_winkers_snippet(existing)
+
+    first_h1 = re.search(r"^# .+\n", cleaned, re.MULTILINE)
+    if first_h1:
+        insert_at = first_h1.end()
+        updated = cleaned[:insert_at] + "\n" + block + cleaned[insert_at:].lstrip("\n")
     else:
-        claude_md.write_text(snippet, encoding="utf-8")
+        updated = block + "\n" + cleaned.lstrip("\n")
 
-    click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
+    final = updated.rstrip() + "\n"
+    if final == existing:
+        click.echo("  [ok] CLAUDE.md Winkers section is up to date.")
+        return
+
+    claude_md.write_text(final, encoding="utf-8")
+    if had_snippet:
+        click.echo(f"  [ok] Updated Winkers section in CLAUDE.md to v{__version__}.")
+    else:
+        click.echo("  [ok] Added Winkers MCP instructions to CLAUDE.md")
 
 
 # Old semantic-summary markers — kept only for the one-shot migration that
@@ -1314,6 +1365,59 @@ def _install_winkers_pointer(root: Path) -> None:
     click.echo("  [ok] Added Winkers pointer to CLAUDE.md")
 
 
+def _is_winkers_managed_hook(command: str) -> bool:
+    """True if a settings.json hook command was installed by winkers.
+
+    Both signals required: the command invokes the winkers binary AND
+    targets one of our managed verbs. Avoids wiping user-owned hooks
+    that happen to mention 'winkers' for unrelated reasons.
+    """
+    cmd = command.lower()
+    if "winkers" not in cmd:
+        return False
+    return any(verb in cmd for verb in ("hook ", "record", "autocommit"))
+
+
+def _strip_managed_hooks(hooks: dict) -> bool:
+    """Sweep every winkers-installed hook from settings before reinstall.
+
+    Marker-update logic in earlier releases left stale paths behind on
+    copied/migrated projects (Issue #3 in the 2026-04-26 invoicekit
+    feedback): a project moved from `C:/orig` to `/tmp/copy` carried
+    `command: "winkers hook pre-write C:/orig"` because the marker
+    matched but the path-rewrite branch missed corner cases. Wiping
+    first means the install pass below is unconditionally a fresh write.
+    Returns True if anything was removed.
+    """
+    changed = False
+    for event_name in list(hooks.keys()):
+        event_hooks = hooks.get(event_name)
+        if not isinstance(event_hooks, list):
+            continue
+        kept_entries: list = []
+        for entry in event_hooks:
+            if not isinstance(entry, dict):
+                kept_entries.append(entry)
+                continue
+            inner = entry.get("hooks", [])
+            if not isinstance(inner, list):
+                kept_entries.append(entry)
+                continue
+            kept_inner = [h for h in inner if not _is_winkers_managed_hook(h.get("command", ""))]
+            if len(kept_inner) != len(inner):
+                changed = True
+            if kept_inner:
+                entry["hooks"] = kept_inner
+                kept_entries.append(entry)
+            # entry with empty hooks list is dropped
+        if kept_entries:
+            hooks[event_name] = kept_entries
+        else:
+            del hooks[event_name]
+            changed = True
+    return changed
+
+
 def _install_session_hook(root: Path, winkers_bin: str) -> None:
     """Register SessionEnd hook + tool permissions in .claude/settings.json."""
     settings_path = root / ".claude" / "settings.json"
@@ -1330,6 +1434,13 @@ def _install_session_hook(root: Path, winkers_bin: str) -> None:
 
     # --- SessionEnd hook ---
     hooks = settings.setdefault("hooks", {})
+
+    # Wipe stale winkers hooks before reinstall — protects against stale
+    # absolute paths (copied/migrated projects) and against legacy hook
+    # names from older releases that the marker-based updater missed.
+    if _strip_managed_hooks(hooks):
+        click.echo("  [ok] Cleared stale winkers hooks before reinstall.")
+        changed = True
     session_end = hooks.setdefault("SessionEnd", [])
 
     # Use forward slashes: Claude Code hooks run in Git Bash on Windows
