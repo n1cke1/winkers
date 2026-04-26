@@ -5,15 +5,17 @@ Storage format (.winkers/embeddings.npz):
   ids:      object array of N unit ids (str)
   hashes:   object array of N sha256(embed_text) — used for incremental skip
 
-The model itself is loaded lazily on first encode; build of small
-indices (≤50 units, e.g. one project at a time) is dominated by model
-load (5–15s on CPU). Subsequent calls in the same process are warm.
+The model is BGE-M3 served as ONNX INT8 (Xenova/bge-m3). Loaded lazily
+on first encode (~2-3s cold on CPU; was 10-15s with sentence-transformers
+float32). Resident RAM ~1.1 GiB (vs 1.7 GiB float32). Set
+WINKERS_USE_LEGACY_ST=1 to fall back to sentence-transformers float32.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -23,16 +25,82 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-MODEL_NAME = "BAAI/bge-m3"
+MODEL_NAME = "BAAI/bge-m3"           # logical model id (vectors are interchangeable)
+_ONNX_REPO = "Xenova/bge-m3"         # actual ONNX-INT8 source on HF
+_ONNX_FILE = "onnx/sentence_transformers_int8.onnx"
+_ONNX_ALLOW_PATTERNS = [
+    _ONNX_FILE,
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "config.json",
+    "sentencepiece.bpe.model",
+]
 DIMENSION = 1024
 INDEX_FILENAME = "embeddings.npz"
 _BATCH_SIZE = 8
+_MAX_LENGTH = 512
 
 
-# Lazy-loaded singleton — initial load is 5-15s on CPU, so we keep it
-# alive across calls within one process. Tests can patch `_get_model`
-# to inject a stub. Lock guards against double-load when the MCP server
-# preloads in a background thread and a request races in.
+class _OnnxBgeM3:
+    """ONNX-INT8 BGE-M3 wrapped with a `.encode()` API compatible with
+    sentence_transformers.SentenceTransformer — drop-in replacement for
+    the rest of this module. The ONNX graph (sentence_transformers_int8.onnx)
+    has CLS-pooling and L2-normalize built in, so output vectors are already
+    1024-dim L2-normalized float32; pooling/normalize args are accepted-and-
+    ignored.
+    """
+
+    def __init__(self) -> None:
+        from huggingface_hub import snapshot_download
+        from tokenizers import Tokenizer
+        import onnxruntime as ort
+
+        snap = snapshot_download(
+            repo_id=_ONNX_REPO,
+            allow_patterns=_ONNX_ALLOW_PATTERNS,
+        )
+        self._tok = Tokenizer.from_file(f"{snap}/tokenizer.json")
+        self._tok.enable_padding()
+        self._tok.enable_truncation(max_length=_MAX_LENGTH)
+        self._sess = ort.InferenceSession(
+            f"{snap}/{_ONNX_FILE}",
+            providers=["CPUExecutionProvider"],
+        )
+        # Used by preload_model() to skip a redundant warmup encode.
+        self._winkers_warmed = False
+
+    def encode(
+        self,
+        texts,
+        batch_size: int = _BATCH_SIZE,
+        normalize_embeddings: bool = True,   # accepted-and-ignored: ONNX graph normalizes
+        convert_to_numpy: bool = True,        # accepted-and-ignored: always numpy
+        show_progress_bar: bool = False,      # accepted-and-ignored
+    ) -> np.ndarray:
+        if isinstance(texts, str):
+            texts = [texts]
+        if not texts:
+            return np.zeros((0, DIMENSION), dtype=np.float32)
+        chunks: list[np.ndarray] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start:start + batch_size]
+            encs = self._tok.encode_batch(batch)
+            ids = np.array([e.ids for e in encs], dtype=np.int64)
+            mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
+            emb = self._sess.run(
+                ["sentence_embedding"],
+                {"input_ids": ids, "attention_mask": mask},
+            )[0]
+            chunks.append(emb.astype(np.float32, copy=False))
+        return np.concatenate(chunks, axis=0) if len(chunks) > 1 else chunks[0]
+
+
+# Lazy-loaded singleton — initial load is 2-3s on CPU (ONNX-INT8) or 10-15s
+# (legacy sentence-transformers float32), so we keep it alive across calls
+# within one process. Tests can patch `_get_model` to inject a stub. Lock
+# guards against double-load when the MCP server preloads in a background
+# thread and a request races in.
 _MODEL = None
 _MODEL_LOCK = threading.Lock()
 
@@ -52,10 +120,14 @@ def _get_model():
         return _MODEL
     with _MODEL_LOCK:
         if _MODEL is None:
-            from sentence_transformers import SentenceTransformer
-            log.info("Loading %s (one-time ~10s, then warm)", MODEL_NAME)
             t0 = time.monotonic()
-            _MODEL = SentenceTransformer(MODEL_NAME)
+            if os.environ.get("WINKERS_USE_LEGACY_ST") == "1":
+                from sentence_transformers import SentenceTransformer
+                log.info("Loading %s via sentence-transformers (LEGACY float32)", MODEL_NAME)
+                _MODEL = SentenceTransformer(MODEL_NAME)
+            else:
+                log.info("Loading %s ONNX-INT8 (one-time ~3s, then warm)", _ONNX_REPO)
+                _MODEL = _OnnxBgeM3()
             log.info("  loaded in %.1fs", time.monotonic() - t0)
     return _MODEL
 
