@@ -22,6 +22,7 @@ from winkers.embeddings.builder import (
     preload_status,
     save_index,
     search,
+    wait_for_preload,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "preload_status",
     "save_index",
     "search",
+    "wait_for_preload",
 ]
