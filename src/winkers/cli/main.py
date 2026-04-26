@@ -2098,6 +2098,138 @@ def improve(path: str, do_apply: bool):
     )
 
 
+def _doctor_check_mcp_json(mcp_json: Path, root: Path, ok, warn) -> None:
+    """Validate .mcp.json: parses, command resolves, args point at this root.
+
+    Catches the failure mode from the 2026-04-26 invoicekit feedback (and
+    confirmed in tespy on 2026-04-26): a project copied/migrated across
+    machines carries a .mcp.json with a stale absolute path or a binary
+    name that doesn't exist on the current host (e.g. `uvx winkers serve
+    C:/Development/...` on a Linux VPS). MCP silently fails to start and
+    the agent runs without architectural context.
+    """
+    import shutil
+
+    try:
+        cfg = json.loads(mcp_json.read_text(encoding="utf-8"))
+    except Exception as e:
+        warn(f".mcp.json is invalid JSON: {e}")
+        return
+
+    entry = (cfg.get("mcpServers") or {}).get("winkers")
+    if not entry:
+        warn(".mcp.json has no 'winkers' entry — run: winkers init")
+        return
+
+    cmd = entry.get("command") or ""
+    args = entry.get("args") or []
+
+    cmd_resolves = False
+    if cmd:
+        if Path(cmd).is_absolute() or "/" in cmd or "\\" in cmd:
+            if Path(cmd).exists():
+                ok(f".mcp.json command exists: {cmd}")
+                cmd_resolves = True
+            else:
+                warn(
+                    f".mcp.json command does not exist: {cmd}\n"
+                    "      run: winkers init  (rewrites to current binary)"
+                )
+        else:
+            resolved = shutil.which(cmd)
+            if resolved:
+                ok(f".mcp.json command on PATH: {cmd} → {resolved}")
+                cmd_resolves = True
+            else:
+                warn(
+                    f".mcp.json command not on PATH: {cmd}\n"
+                    "      run: winkers init"
+                )
+
+    # Heuristic: any absolute-path arg that isn't a flag is the project
+    # root. Compare to the doctor's `root` to catch stale paths from a
+    # copied project (the bug Issue #3 in the invoicekit feedback).
+    root_arg = next(
+        (a for a in args if isinstance(a, str) and a not in ("serve",) and (Path(a).is_absolute() or "/" in a or "\\" in a)),
+        None,
+    )
+    if root_arg:
+        try:
+            same = Path(root_arg).resolve() == root
+        except Exception:
+            same = False
+        if same:
+            ok(f".mcp.json points at this project root")
+        else:
+            warn(
+                f".mcp.json points at {root_arg} but current root is {root}\n"
+                "      run: winkers init  (rewrites the path)"
+            )
+    elif cmd_resolves:
+        # No root in args — that's fine for some configs but worth noting.
+        ok(".mcp.json: no project root in args (server will use cwd)")
+
+
+def _doctor_check_user_mcp(root: Path, ok, warn) -> None:
+    """Check ~/.claude.json for user-scope winkers MCP.
+
+    Project-scope MCP from `.mcp.json` requires a workspace trust dialog
+    that Claude Code SKIPS in `--print` mode. Headless workflows (ticket
+    runners, scheduled agents) therefore can't see project-scope MCP at
+    all. The fix is a user-scope entry under top-level `mcpServers` in
+    `~/.claude.json`. Without it, ticket-runner sessions on this project
+    would run with no winkers architectural context — the failure mode
+    we observed in tespy on 2026-04-25 (3 ticket sessions, 0 MCP calls).
+    """
+    user_cfg_path = Path.home() / ".claude.json"
+    if not user_cfg_path.exists():
+        warn(
+            "~/.claude.json missing — Claude Code may not have run yet, "
+            "or another IDE is in use; user-scope MCP not checked."
+        )
+        return
+
+    try:
+        user_cfg = json.loads(user_cfg_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        warn(f"Could not read ~/.claude.json: {e}")
+        return
+
+    entry = (user_cfg.get("mcpServers") or {}).get("winkers")
+    if not entry:
+        warn(
+            "No user-scope winkers MCP in ~/.claude.json.\n"
+            "      claude --print (ticket runners, headless agents) skip the\n"
+            "      project-scope trust dialog and will NOT see winkers MCP.\n"
+            "      Fix: add to top-level mcpServers in ~/.claude.json:\n"
+            f'        {{"winkers": {{"type": "stdio", "command": "<winkers bin>",\n'
+            f'          "args": ["serve", "{root}"]}}}}'
+        )
+        return
+
+    args = entry.get("args") or []
+    root_arg = next(
+        (a for a in args if isinstance(a, str) and a not in ("serve",) and (Path(a).is_absolute() or "/" in a or "\\" in a)),
+        None,
+    )
+    if not root_arg:
+        warn("User-scope winkers MCP has no project root in args.")
+        return
+
+    try:
+        same = Path(root_arg).resolve() == root
+    except Exception:
+        same = False
+    if same:
+        ok("User-scope winkers MCP set to this project (~/.claude.json)")
+    else:
+        warn(
+            f"User-scope winkers MCP points at {root_arg}, not this project.\n"
+            f"      claude --print sessions for THIS project ({root}) won't see\n"
+            "      winkers MCP. Edit ~/.claude.json mcpServers.winkers.args."
+        )
+
+
 @cli.command()
 @click.argument("path", default=".", type=click.Path(exists=True))
 def doctor(path: str):
@@ -2227,12 +2359,16 @@ def doctor(path: str):
     # ── IDE integration ──────────────────────────────────────────
     click.echo("\n  IDE integration:")
 
-    # MCP registration
+    # MCP registration — health check
     mcp_json = root / ".mcp.json"
     if mcp_json.exists():
-        ok("MCP registered (.mcp.json)")
+        _doctor_check_mcp_json(mcp_json, root, ok, warn)
     else:
         warn("No .mcp.json — run: winkers init (with .claude/ present)")
+
+    # User-scope MCP — needed for `claude --print` headless workflows
+    # (ticket runners) where the project-scope trust dialog is skipped.
+    _doctor_check_user_mcp(root, ok, warn)
 
     # CLAUDE.md snippet
     claude_md = root / "CLAUDE.md"
