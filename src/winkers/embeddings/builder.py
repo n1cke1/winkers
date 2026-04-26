@@ -36,6 +36,14 @@ _BATCH_SIZE = 8
 _MODEL = None
 _MODEL_LOCK = threading.Lock()
 
+# Preload state — lets `_tool_find_work_area` distinguish "no preload
+# started, lazy-load on demand (slow but expected)" from "background
+# preload running, query would block on lock for tens of seconds —
+# return early so the agent doesn't hit the MCP per-tool timeout".
+_PRELOAD_LOCK = threading.Lock()
+_PRELOAD_STARTED_AT: float | None = None
+_PRELOAD_DONE_AT: float | None = None
+
 
 def _get_model():
     global _MODEL
@@ -59,16 +67,43 @@ def preload_model() -> None:
     encode here so the first real find_work_area query hits fully-warm
     paths. No-op if already warm.
     """
+    global _PRELOAD_STARTED_AT, _PRELOAD_DONE_AT
+    with _PRELOAD_LOCK:
+        if _PRELOAD_DONE_AT is not None:
+            return
+        if _PRELOAD_STARTED_AT is None:
+            _PRELOAD_STARTED_AT = time.monotonic()
     model = _get_model()
-    if getattr(model, "_winkers_warmed", False):
-        return
-    model.encode(
-        ["warmup"],
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    model._winkers_warmed = True
+    if not getattr(model, "_winkers_warmed", False):
+        model.encode(
+            ["warmup"],
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        model._winkers_warmed = True
+    with _PRELOAD_LOCK:
+        _PRELOAD_DONE_AT = time.monotonic()
+
+
+def preload_status() -> dict:
+    """Return current preload state for callers that want to avoid blocking.
+
+    States:
+      - "idle":    no preload kicked off; on-demand load will block (expected).
+      - "loading": background preload in flight; querying now would block on
+                   _MODEL_LOCK for tens of seconds — caller should defer.
+      - "ready":   model + warmup encode complete; queries are fast.
+    """
+    with _PRELOAD_LOCK:
+        if _PRELOAD_DONE_AT is not None:
+            return {"state": "ready"}
+        if _PRELOAD_STARTED_AT is None:
+            return {"state": "idle"}
+        return {
+            "state": "loading",
+            "elapsed_s": round(time.monotonic() - _PRELOAD_STARTED_AT, 1),
+        }
 
 
 # ---------------------------------------------------------------------------

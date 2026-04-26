@@ -2074,6 +2074,7 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
     from winkers.embeddings import (
         INDEX_FILENAME,
         load_index,
+        preload_status,
         search,
     )
 
@@ -2085,6 +2086,23 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
                 "Run `winkers init --with-units` to author per-unit "
                 "descriptions and build embeddings. Without the index, "
                 "fall back to `before_create` for fuzzy graph search."
+            ),
+        }
+
+    # If a background preload is in flight, calling search() now would
+    # block on the model lock for tens of seconds — long enough for the
+    # MCP client to give up. Return a fast "warming" response so the
+    # agent can proceed with orient/browse and retry shortly.
+    status = preload_status()
+    if status.get("state") == "loading":
+        elapsed = status.get("elapsed_s", 0.0)
+        return {
+            "warming": True,
+            "elapsed_s": elapsed,
+            "hint": (
+                f"BGE-M3 is still warming in the background ({elapsed}s elapsed). "
+                "First-call cost is ~20-30s on CPU. Use orient/browse/before_create "
+                "now and retry find_work_area afterwards — it will be fast."
             ),
         }
 
