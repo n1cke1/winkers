@@ -2076,6 +2076,7 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
         load_index,
         preload_status,
         search,
+        wait_for_preload,
     )
 
     idx_path = root / ".winkers" / INDEX_FILENAME
@@ -2090,21 +2091,25 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
         }
 
     # If a background preload is in flight, calling search() now would
-    # block on the model lock for tens of seconds — long enough for the
-    # MCP client to give up. Return a fast "warming" response so the
-    # agent can proceed with orient/browse and retry shortly.
+    # block on the model lock for tens of seconds. Wait up to 15s for
+    # warmup to finish — agents ignored the prior "retry shortly" hint
+    # and never came back, so a bounded synchronous wait is preferable
+    # to returning empty-handed. 15s is well under MCP's per-tool
+    # timeout (~60-120s) and typically rides out the last few seconds
+    # of preload.
     status = preload_status()
     if status.get("state") == "loading":
-        elapsed = status.get("elapsed_s", 0.0)
-        return {
-            "warming": True,
-            "elapsed_s": elapsed,
-            "hint": (
-                f"BGE-M3 is still warming in the background ({elapsed}s elapsed). "
-                "First-call cost is ~20-30s on CPU. Use orient/browse/before_create "
-                "now and retry find_work_area afterwards — it will be fast."
-            ),
-        }
+        if not wait_for_preload(timeout=15.0):
+            elapsed = preload_status().get("elapsed_s", 0.0)
+            return {
+                "warming": True,
+                "elapsed_s": elapsed,
+                "hint": (
+                    f"BGE-M3 still warming after {elapsed}s (waited 15s here). "
+                    "Use orient/browse/before_create now and retry "
+                    "find_work_area afterwards — it will be fast."
+                ),
+            }
 
     index = load_index(idx_path)
     if len(index) == 0:

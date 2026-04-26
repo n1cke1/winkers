@@ -43,6 +43,7 @@ _MODEL_LOCK = threading.Lock()
 _PRELOAD_LOCK = threading.Lock()
 _PRELOAD_STARTED_AT: float | None = None
 _PRELOAD_DONE_AT: float | None = None
+_PRELOAD_DONE_EVENT = threading.Event()
 
 
 def _get_model():
@@ -84,6 +85,18 @@ def preload_model() -> None:
         model._winkers_warmed = True
     with _PRELOAD_LOCK:
         _PRELOAD_DONE_AT = time.monotonic()
+    _PRELOAD_DONE_EVENT.set()
+
+
+def wait_for_preload(timeout: float) -> bool:
+    """Block up to `timeout` seconds waiting for an in-flight preload.
+
+    Returns True if the model is (or becomes) ready before the deadline,
+    False on timeout. Used by `_tool_find_work_area` to ride out the
+    last few seconds of warmup instead of returning early — keeps the
+    wait well under MCP's per-tool timeout (~60-120s).
+    """
+    return _PRELOAD_DONE_EVENT.wait(timeout=timeout)
 
 
 def preload_status() -> dict:
