@@ -10,7 +10,8 @@
 - `src/winkers/semantic.py` — SemanticLayer: Claude API enrichment → .winkers/semantic.json
 - `src/winkers/ui_map.py` — UIMap: scan HTML/Jinja2 templates → link Flask routes to UI elements (panels, tables, forms, buttons, inputs, tabs, indicators)
 - `src/winkers/languages/` — language profiles: Python, TypeScript, JavaScript, Java, Go, Rust, C#
-- `src/winkers/mcp/` — MCP server (tools: orient, scope, convention_read, rule_read, before_create, impact_check, session_done) + auto-rebuild on file changes
+- `src/winkers/mcp/` — MCP server (tools: orient, find_work_area, browse, scope, convention_read, rule_read, before_create, impact_check, session_done) + auto-rebuild on file changes
+- `src/winkers/embeddings/` — BGE-M3 (sentence-transformers) embedding builder + on-disk index (`.winkers/embeddings.npz`). Background preload on `serve` start, bounded `wait_for_preload(timeout)` for `find_work_area` to ride out warmup. CPU-only torch, ~1.7 GiB RAM resident when warm
 - `src/winkers/target_resolution.py` — intent categorization (create / change / unknown) + regex target extraction from graph's name dictionary
 - `src/winkers/value_locked.py` — AST detector for module-level literal collections (set/frozenset, ≤64 values), their consumer functions, and caller literal-arg usage. Powers `value_locked` warnings in scope/before_create/impact_check.
 - `src/winkers/impact/` — pre-computed impact analysis: models (`ImpactReport`, `CallerClassification`), `ImpactStore` (load/save/prune `.winkers/impact.json`), combined LLM prompt (intent + impact in one call), `ImpactGenerator` (FunctionContext, content_hash cache, batch concurrency, progress bar). Runs at `winkers init` when Claude API is configured.

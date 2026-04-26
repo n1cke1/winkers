@@ -37,12 +37,35 @@ Without the API key, the graph still works — semantic enrichment is skipped.
 | Tool | Purpose |
 |------|---------|
 | `orient(include, zone?, min_callers?)` | Project map: zones, conventions, hotspots, routes, UI map, functions graph |
-| `scope(function?, file?)` | Deep context: callers, callees, related rules, semantic context |
+| `find_work_area(query, k?)` | Semantic search over per-unit descriptions; returns top-k matches with file + line ranges (**experimental** — see below) |
+| `before_create(intent, zone?)` | Pre-edit check: existing implementations, affected callers, risk |
+| `browse(zone?, file?, min_callers?)` | Mid-level inventory: functions + intents in a zone or file (paginated) |
+| `scope(function?, file?)` | Deep context: callers, callees, related rules, semantic context, impact |
 | `convention_read(target)` | Zone intent, data flow, domain context, checklist |
 | `rule_read(category)` | All rules for a category with wrong_approach |
+| `impact_check(file_path)` | Incremental graph update + duplicate + broken-import check (auto via post-write hook in Claude Code) |
 
-The agent calls `orient(["map","conventions"])` first, then `scope()` for
-files it plans to modify. Token budget (default 2000) prevents context overflow.
+The agent typically calls `orient(["map","conventions"])` first, then either
+`find_work_area("<task>")` (when the work area isn't obvious) or `before_create()` /
+`scope()` directly (when explicit fn/file targets exist). Token budget
+(default 2000) prevents context overflow.
+
+### Semantic search (experimental)
+
+`find_work_area` uses **local BGE-M3 embeddings** (1024-dim, multilingual; no
+API key required). The model is loaded inside the MCP server process and
+costs **~1.7 GiB RAM** when warm. Build the per-unit index with
+`winkers init --with-units`; without it, `find_work_area` returns a
+"build the index" hint and the agent falls back to `before_create` / Grep.
+
+We picked local-only to avoid an extra API dependency and keep queries free,
+but on memory-tight hosts (≤2 GiB RAM) the cost can be a problem during
+agent sessions that also load other Python processes. Recommendations:
+
+- Keep ≥1 GiB swap headroom or BGE will OOM during preload.
+- Skip `--with-units` on tiny boxes — `before_create` + `scope` still cover
+  most lookups via the graph.
+- A cloud-API embeddings backend may be added later for low-memory hosts.
 
 ## CLI commands
 
