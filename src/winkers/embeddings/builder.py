@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,19 +31,44 @@ _BATCH_SIZE = 8
 
 # Lazy-loaded singleton — initial load is 5-15s on CPU, so we keep it
 # alive across calls within one process. Tests can patch `_get_model`
-# to inject a stub.
+# to inject a stub. Lock guards against double-load when the MCP server
+# preloads in a background thread and a request races in.
 _MODEL = None
+_MODEL_LOCK = threading.Lock()
 
 
 def _get_model():
     global _MODEL
-    if _MODEL is None:
-        from sentence_transformers import SentenceTransformer
-        log.info("Loading %s (one-time ~10s, then warm)", MODEL_NAME)
-        t0 = time.monotonic()
-        _MODEL = SentenceTransformer(MODEL_NAME)
-        log.info("  loaded in %.1fs", time.monotonic() - t0)
+    if _MODEL is not None:
+        return _MODEL
+    with _MODEL_LOCK:
+        if _MODEL is None:
+            from sentence_transformers import SentenceTransformer
+            log.info("Loading %s (one-time ~10s, then warm)", MODEL_NAME)
+            t0 = time.monotonic()
+            _MODEL = SentenceTransformer(MODEL_NAME)
+            log.info("  loaded in %.1fs", time.monotonic() - t0)
     return _MODEL
+
+
+def preload_model() -> None:
+    """Trigger BGE-M3 load + a warmup encode. Safe from any thread.
+
+    Loading weights warms the model object; the first encode additionally
+    JITs the tokenizer and torch graph (~10s extra on CPU). We run a tiny
+    encode here so the first real find_work_area query hits fully-warm
+    paths. No-op if already warm.
+    """
+    model = _get_model()
+    if getattr(model, "_winkers_warmed", False):
+        return
+    model.encode(
+        ["warmup"],
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    model._winkers_warmed = True
 
 
 # ---------------------------------------------------------------------------

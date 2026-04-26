@@ -34,7 +34,26 @@ def create_server(root: Path) -> Server:
         return state["graph"]
 
     register_tools(server, root, get_graph)
+    _maybe_preload_embeddings(root)
     return server
+
+
+def _maybe_preload_embeddings(root: Path) -> None:
+    """Warm BGE-M3 in a daemon thread when a units index is present.
+
+    Without this, the first find_work_area call pays a 5-15s cold start
+    while the agent waits. Skipped when no index exists so projects that
+    don't use semantic search don't pay ~2 GiB of RAM for nothing.
+    Daemon-flagged so the process can exit instantly even mid-load.
+    """
+    import threading
+
+    from winkers.embeddings import INDEX_FILENAME
+    from winkers.embeddings.builder import preload_model
+
+    if not (root / ".winkers" / INDEX_FILENAME).exists():
+        return
+    threading.Thread(target=preload_model, daemon=True, name="bge-preload").start()
 
 
 class _FilteredStdin(io.RawIOBase):
