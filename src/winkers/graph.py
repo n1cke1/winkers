@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -216,6 +217,7 @@ class GraphBuilder:
             imports=imports,
             function_ids=fn_ids,
             lines_of_code=loc,
+            source_hash=hashlib.sha256(parse_result.source).hexdigest(),
         )
 
     def _extract_imports(self, parse_result: ParseResult) -> list[dict]:

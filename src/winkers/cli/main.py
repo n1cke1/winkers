@@ -1581,7 +1581,7 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
             "event": "PostToolUse",
             "marker": "post-write",
             "command": f"{hook_bin} hook post-write {root_posix}",
-            "timeout": 5,
+            "timeout": 30,
             "matcher": "Write|Edit|MultiEdit",
             "label": "post-write impact check",
         },
