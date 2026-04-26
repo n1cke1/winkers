@@ -101,6 +101,21 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
+> **CPU-only torch.** Winkers' embeddings (BGE-M3) run on CPU. With `uv`
+> / `uvx` / `uv pip`, `pyproject.toml` pins torch to
+> `download.pytorch.org/whl/cpu` on Linux/Windows, so installs stay slim.
+> With **`pip` or `pipx`** the pin is ignored — install CPU torch first
+> to avoid pulling ~5 GiB of CUDA wheels:
+>
+> ```bash
+> # pipx
+> pipx install winkers --pip-args="--index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple"
+>
+> # or plain pip, two-step
+> pip install --index-url https://download.pytorch.org/whl/cpu torch
+> pip install winkers
+> ```
+
 ## Privacy
 
 - **Local by default.** Graph parsing uses tree-sitter locally. No data leaves
