@@ -34,12 +34,20 @@ dependencies = [
     "aiohttp>=3.9.0",
     "snowballstemmer>=2.2",
     "numpy>=1.24",
-    "sentence-transformers>=3.0",
+    "onnxruntime>=1.16",
+    "tokenizers>=0.20",
+    "huggingface_hub>=0.20",
 ]
 
 [project.optional-dependencies]
 semantic = [
     "anthropic>=0.40.0",
+]
+# Fallback to sentence-transformers float32 BGE-M3 for users who need it
+# (set WINKERS_USE_LEGACY_ST=1 at runtime). Pulls torch + transformers —
+# the bloat we removed from core. See README "Semantic search" section.
+legacy = [
+    "sentence-transformers>=3.0",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -58,12 +66,10 @@ Issues = "https://github.com/n1cke1/winkers/issues"
 [project.scripts]
 winkers = "winkers.cli.main:cli"
 
-# Pin torch to the CPU-only PyPI index for non-macOS hosts. Default PyPI
-# torch wheels pull ~5 GiB of nvidia-* CUDA dependencies, which winkers
-# never uses (BGE-M3 inference is CPU-only by design — see embeddings/
-# builder.py). macOS torch wheels are CPU/MPS, so we leave them on the
-# default index. Only honored by uv (uvx, uv pip); plain pip ignores
-# this — see the README install section.
+# Pin torch to the CPU-only PyPI index for non-macOS hosts. Only relevant
+# when [legacy] extra is installed — core no longer depends on torch.
+# Default PyPI torch wheels pull ~5 GiB of nvidia-* CUDA dependencies.
+# Only honored by uv (uvx, uv pip); plain pip ignores this.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

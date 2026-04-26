@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.4
+
+### Embeddings: ONNX-INT8 BGE-M3 replaces sentence-transformers float32
+
+`find_work_area` and the index builder now run BGE-M3 via ONNX-INT8
+(`Xenova/bge-m3`, `sentence_transformers_int8.onnx`, 568 MB on disk)
+instead of `sentence_transformers.SentenceTransformer("BAAI/bge-m3")`.
+Cold load drops 10–15 s → ~3 s, warm batch encode 5 s → 0.1 s, query
+latency 397 ms → 38 ms (10× faster), resident RAM 1.7 GiB → 1.1 GiB.
+
+Quality on a 417-unit codebase / 15 representative queries: top-1 match
+73%, top-5 overlap 81%, average top-1 score drift 2.4%. The four
+mismatches all sit in "ambiguous" zones (multiple equally relevant
+candidates in the same file/domain), and in every case the missed pick
+was within the other model's top-3 — so `find_work_area`'s top-K output
+to the agent is largely unchanged.
+
+### Dependency rearrangement
+
+- **Core deps**: drop `sentence-transformers`; add `onnxruntime>=1.16`,
+  `tokenizers>=0.20`, `huggingface_hub>=0.20`. `torch` and `transformers`
+  are no longer transitively pulled into core — pipx/pip installs no
+  longer risk the 5 GiB CUDA wheel hop. The `tool.uv.sources`
+  `pytorch-cpu` pin still applies, but only when `[legacy]` is asked for.
+- **`[legacy]` extra**: `sentence-transformers>=3.0` for users who want
+  the float32 stack back. Set `WINKERS_USE_LEGACY_ST=1` at runtime to
+  switch `_get_model()` to `SentenceTransformer("BAAI/bge-m3")` —
+  vectors remain interchangeable with the old `embeddings.npz` format.
+- INT8 vectors have a small drift (~2%) from float32; on upgrade,
+  back up the prior `embeddings.npz` and re-embed with `force=True`
+  rather than mixing old/new indexes.
+
 ## 0.8.1
 
 ### `orient.include` — clients that mis-serialise arrays no longer lock agents out

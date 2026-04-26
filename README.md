@@ -53,19 +53,27 @@ The agent typically calls `orient(["map","conventions"])` first, then either
 ### Semantic search (experimental)
 
 `find_work_area` uses **local BGE-M3 embeddings** (1024-dim, multilingual; no
-API key required). The model is loaded inside the MCP server process and
-costs **~1.7 GiB RAM** when warm. Build the per-unit index with
+API key required). Served via ONNX-INT8 (`Xenova/bge-m3`,
+`sentence_transformers_int8.onnx`, 568 MB on disk): cold load ~3 s, warm
+batch ~0.1 s, **~1.1 GiB RAM** resident. Build the per-unit index with
 `winkers init --with-units`; without it, `find_work_area` returns a
 "build the index" hint and the agent falls back to `before_create` / Grep.
 
-We picked local-only to avoid an extra API dependency and keep queries free,
-but on memory-tight hosts (≤2 GiB RAM) the cost can be a problem during
-agent sessions that also load other Python processes. Recommendations:
+Quality vs the original sentence-transformers float32 stack on a real
+417-unit codebase, 15 representative queries: top-1 match 73%, top-5
+overlap 81%, average score drift 2.4%. Mismatches concentrate in
+"ambiguous" zones (multiple equally relevant candidates in the same
+file), and the missed pick is consistently within the other model's
+top-3. Set `WINKERS_USE_LEGACY_ST=1` to fall back to the float32 stack
+(install with `pip install winkers[legacy]` to get sentence-transformers
++ torch back).
 
-- Keep ≥1 GiB swap headroom or BGE will OOM during preload.
-- Skip `--with-units` on tiny boxes — `before_create` + `scope` still cover
-  most lookups via the graph.
-- A cloud-API embeddings backend may be added later for low-memory hosts.
+Tips for memory-tight hosts (~2 GiB RAM):
+
+- Keep ≥0.5 GiB swap headroom — ONNX session loading briefly spikes RSS.
+- Skip `--with-units` if the per-function index isn't worth ~1 GiB resident
+  in the MCP server — `before_create` + `scope` still cover most lookups
+  via the graph.
 
 ## CLI commands
 
@@ -124,9 +132,10 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-> **CPU-only torch.** Winkers' embeddings (BGE-M3) run on CPU. With `uv`
-> / `uvx` / `uv pip`, `pyproject.toml` pins torch to
-> `download.pytorch.org/whl/cpu` on Linux/Windows, so installs stay slim.
+> **CPU-only torch.** Core no longer depends on torch — embeddings run via
+> `onnxruntime` (CPU). torch is only pulled in by the optional `[legacy]`
+> extra, where `pyproject.toml` pins it to `download.pytorch.org/whl/cpu`
+> on Linux/Windows when installed via `uv` / `uvx` / `uv pip`.
 > With **`pip` or `pipx`** the pin is ignored — install CPU torch first
 > to avoid pulling ~5 GiB of CUDA wheels:
 >

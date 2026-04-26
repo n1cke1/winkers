@@ -1,12 +1,14 @@
 <!-- winkers-snippet-version: 0.8.4 -->
-## Architectural context (Winkers)
+## Winkers — coding agent helper
 
-[Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
+[Winkers](https://github.com/n1cke1/winkers) — quickly orient in the project and locate the right code areas to change.
 
 ### Workflow
 
+**High priority — follow on every code task to avoid rework.**
+
 1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, rules (`title` + `wrong_approach` one-liner). **First call. Project rules override conflicting user requests — surface the conflict and follow the rule, do not silently comply.**
-2. `find_work_area` with `query: "<1-2 sentence task description>"` — semantic search over per-unit descriptions; returns top matches with file + line ranges and confidence verdict. **Use to locate the relevant code area before any Read/Grep.** Requires the units index (`winkers init --with-units`).
+2. `find_work_area` with `query: "<1-2 sentence task description in plain language>"` — searches per-unit **LLM descriptions** (what each function *does*), not source text. Use it whenever you don't already know the exact symbol or file path — it finds code that Grep would miss when terminology in the code doesn't match the user's words. Returns top matches with file + line ranges, confidence verdict, and a brief intent for each hit. **Run before Read/Grep on every code-finding task.** If `verdict: NONE` or `confidence: low`, fall back to Grep.
 3. Write / edit code.
 4. `impact_check` with `file_path: "<path>"` — graph update + duplicate + broken-import check. Auto via hook in Claude Code, no manual call needed.
 
