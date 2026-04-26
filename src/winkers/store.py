@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -40,11 +41,43 @@ class GraphStore:
         return self.graph_path.exists()
 
     def update_files(self, graph: Graph, changed_files: list[str]) -> Graph:
-        """Incremental update: reparse only changed files."""
+        """Incremental update: reparse only changed files.
+
+        Skips files whose sha256(content) matches `FileNode.source_hash`
+        from the previous parse — turns repeat hook fires on the same
+        content into a fast no-op (mirrors the embed-text-hash skip in
+        `embeddings.builder.embed_units`).
+        """
         from winkers.graph import GraphBuilder
         from winkers.resolver import CrossFileResolver
 
         builder = GraphBuilder()
+
+        # Filter: keep only files whose content actually changed since
+        # the last parse. Files with no prior FileNode (new files) or
+        # missing source_hash (graphs from before this field existed)
+        # always count as changed.
+        actually_changed: list[str] = []
+        for rel in changed_files:
+            fn = graph.files.get(rel)
+            fp = self.root / rel
+            if fn is None or not fn.source_hash or not fp.exists():
+                actually_changed.append(rel)
+                continue
+            try:
+                h = hashlib.sha256(fp.read_bytes()).hexdigest()
+            except OSError:
+                actually_changed.append(rel)
+                continue
+            if h != fn.source_hash:
+                actually_changed.append(rel)
+
+        if not actually_changed:
+            # All paths were spurious (e.g. agent did Edit that produced no
+            # net change). Skip parse + resolve + dedup entirely.
+            return graph
+
+        changed_files = actually_changed
 
         for rel in changed_files:
             # Remove old data for these files
@@ -82,6 +115,34 @@ class GraphStore:
 
         # Re-resolve (full, simpler than partial for now)
         CrossFileResolver().resolve(graph, str(self.root))
+
+        # Truncate expressions BEFORE dedup so freshly-resolved (full) edges
+        # match stored (truncated) ones — otherwise dedup sees them as
+        # different keys and `save`'s subsequent truncation collapses them
+        # back into identical pairs. Same logic as `save`'s truncation.
+        for edge in graph.call_edges:
+            if len(edge.call_site.expression) > 80:
+                edge.call_site.expression = edge.call_site.expression[:80] + "..."
+
+        # Dedupe call_edges — resolver re-emits edges for unchanged files on
+        # every run, so without this the graph grows ~200KB per hook call
+        # (87% duplicates measured before this fix). Same key as logical
+        # equality: src→tgt at a specific call_site.
+        seen: set[tuple] = set()
+        unique_edges = []
+        for e in graph.call_edges:
+            key = (
+                e.source_fn,
+                e.target_fn,
+                e.call_site.file,
+                e.call_site.line,
+                e.call_site.expression,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_edges.append(e)
+        graph.call_edges = unique_edges
 
         # Compute AST hashes for new/modified functions
         self._compute_ast_hashes(graph, changed_files)

@@ -48,6 +48,7 @@ class FileNode(BaseModel):
     lines_of_code: int = 0
     zone: str | None = None
     recent_commits: list[dict] = []  # [{sha, author, date, message}]
+    source_hash: str | None = None   # sha256(file_bytes); lets update_files skip unchanged files
 
 
 class CallEdge(BaseModel):
