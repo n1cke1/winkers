@@ -18,6 +18,8 @@ from winkers.embeddings.builder import (
     EmbeddingIndex,
     embed_units,
     load_index,
+    preload_model,
+    preload_status,
     save_index,
     search,
 )
@@ -29,6 +31,8 @@ __all__ = [
     "MODEL_NAME",
     "embed_units",
     "load_index",
+    "preload_model",
+    "preload_status",
     "save_index",
     "search",
 ]
