@@ -14,6 +14,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from winkers.hooks._logger import log_hook
+from winkers.session.audit import consume_pending_audit
+
 # Patterns that indicate creation intent
 _CREATION_PATTERNS = re.compile(
     r"\b(add|create|implement|write|build|make|introduce|new)\b"
@@ -86,67 +89,89 @@ def run(root: Path) -> None:
     except Exception:
         sys.exit(0)  # Non-blocking: let prompt pass through.
 
-    user_prompt = hook_data.get("user_prompt", "") or ""
+    session_id = str(hook_data.get("session_id", ""))
 
-    sections: list[str] = []
+    with log_hook(root, session_id, "UserPromptSubmit", "prompt_enrich") as rec:
+        user_prompt = hook_data.get("user_prompt", "") or ""
+        rec["prompt_chars"] = len(user_prompt)
 
-    # ── 1. Audit TODO from prior session ─────────────────────────────────
-    pending_text = _consume_pending(root)
-    if pending_text:
-        sections.append(
-            "[Winkers] Cross-file coherence TODO from previous session "
-            "audit — verify or knock these off before unrelated work:\n"
-            + pending_text
-        )
+        sections: list[str] = []
 
-    # ── 2. before_create on creation intent (existing behaviour) ────────
-    if user_prompt and has_creation_intent(user_prompt):
-        from winkers.search import (
-            format_before_create_response,
-            search_functions,
-        )
-        from winkers.store import GraphStore
+        # ── 1a. Pending session audit from previous Stop hook (Wave 6) ─────
+        # Surfaces WARN/FAIL audit verdicts on the *next* session's first
+        # prompt so the agent sees "previous session ended with FAIL" up
+        # front. Consumed once: archived to .winkers/history/ on read.
+        pending_audit = consume_pending_audit(root)
+        if pending_audit:
+            sections.append(
+                "[Winkers] Previous session ended with a non-PASS audit. "
+                "Address these before unrelated work:\n"
+                + pending_audit
+            )
+            rec["audit_injected"] = True
 
-        store = GraphStore(root)
-        graph = store.load()
-        if graph is not None:
-            intent = extract_intent(user_prompt)
-            matches = search_functions(graph, intent)
-            if matches:
-                result = format_before_create_response(
-                    graph, intent, matches, root=root,
-                )
-                lines = [
-                    "[Winkers] Existing implementations found before "
-                    "creating new code:"
-                ]
-                existing = result.get("existing", [])
-                for item in existing[:3]:
-                    fn_name = item.get("function", "")
-                    file_path = item.get("file", "")
-                    score = item.get("score", 0)
-                    sig = item.get("signature", "")
-                    lines.append(
-                        f"  - {fn_name}{sig} in {file_path} "
-                        f"(score: {score:.2f})"
+        # ── 1b. Audit TODO from prior session (cross-file coherence) ───────
+        pending_text = _consume_pending(root)
+        if pending_text:
+            sections.append(
+                "[Winkers] Cross-file coherence TODO from previous session "
+                "audit — verify or knock these off before unrelated work:\n"
+                + pending_text
+            )
+            rec["pending_injected"] = True
+
+        # ── 2. before_create on creation intent (existing behaviour) ────────
+        if user_prompt and has_creation_intent(user_prompt):
+            rec["creation_intent"] = True
+            from winkers.search import (
+                format_before_create_response,
+                search_functions,
+            )
+            from winkers.store import GraphStore
+
+            store = GraphStore(root)
+            graph = store.load()
+            if graph is not None:
+                intent = extract_intent(user_prompt)
+                matches = search_functions(graph, intent)
+                if matches:
+                    result = format_before_create_response(
+                        graph, intent, matches, root=root,
                     )
-                suggestion = result.get("suggestion")
-                if suggestion:
-                    lines.append(f"  SUGGESTION: {suggestion}")
-                lines.append(
-                    "  Consider reusing existing code before "
-                    "writing new functions."
-                )
-                sections.append("\n".join(lines))
+                    lines = [
+                        "[Winkers] Existing implementations found before "
+                        "creating new code:"
+                    ]
+                    existing = result.get("existing", [])
+                    for item in existing[:3]:
+                        fn_name = item.get("function", "")
+                        file_path = item.get("file", "")
+                        score = item.get("score", 0)
+                        sig = item.get("signature", "")
+                        lines.append(
+                            f"  - {fn_name}{sig} in {file_path} "
+                            f"(score: {score:.2f})"
+                        )
+                    suggestion = result.get("suggestion")
+                    if suggestion:
+                        lines.append(f"  SUGGESTION: {suggestion}")
+                    lines.append(
+                        "  Consider reusing existing code before "
+                        "writing new functions."
+                    )
+                    sections.append("\n".join(lines))
+                    rec["matches_injected"] = len(existing[:3])
 
-    if not sections:
-        sys.exit(0)
+        rec["sections_emitted"] = len(sections)
 
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": "\n\n".join(sections),
+        if not sections:
+            sys.exit(0)
+
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": "\n\n".join(sections),
+            }
         }
-    }
-    print(json.dumps(output))
-    sys.exit(0)
+        print(json.dumps(output))
+        sys.exit(0)

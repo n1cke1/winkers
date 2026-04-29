@@ -128,6 +128,42 @@ def test_extract_explicit_targets_class_method():
     assert "InvoiceRepo.get_with_items" in fns
 
 
+def test_extract_explicit_targets_class_attribute():
+    """`Class.attr` (no parens) is captured — relationships, fields."""
+    fns, _ = extract_explicit_targets(
+        "fix Client.invoices relationship cascade"
+    )
+    assert "Client.invoices" in fns
+
+
+def test_extract_explicit_targets_class_attribute_batch():
+    """Multiple `Class.attr` targets in a comma list each resolve."""
+    fns, _ = extract_explicit_targets(
+        "fix Client.invoices, Client.payments, Client.contracts"
+    )
+    assert "Client.invoices" in fns
+    assert "Client.payments" in fns
+    assert "Client.contracts" in fns
+
+
+def test_extract_explicit_targets_class_method_not_double_counted():
+    """`Class.method()` (with parens) goes to method regex; attr regex skips it."""
+    fns, _ = extract_explicit_targets(
+        "fix Client.method_call() and Client.attribute_field"
+    )
+    assert "Client.method_call" in fns
+    assert "Client.attribute_field" in fns
+    # method form must not also produce a bare "Client.method_call" twice
+    assert sum(1 for f in fns if f == "Client.method_call") == 1
+
+
+def test_extract_explicit_targets_attribute_skips_constants():
+    """Lowercase first-char restriction — Module.MAX_RETRIES isn't an attribute."""
+    fns, _ = extract_explicit_targets("change Module.MAX_RETRIES default")
+    # Constants are intentionally not attribute_unit candidates.
+    assert "Module.MAX_RETRIES" not in fns
+
+
 def test_extract_explicit_targets_paths_forward_and_back_slash():
     """Paths with forward and back slashes are both captured, normalized to /."""
     fns, paths = extract_explicit_targets(

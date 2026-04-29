@@ -14,7 +14,9 @@ from pydantic import BaseModel
 
 from winkers.models import FunctionNode
 
-SCHEMA_VERSION = "2"  # v2 widens safe/dangerous_operations maxlen 15 → 100
+SCHEMA_VERSION = "3"  # v3 adds `description` + `hardcoded_artifacts` to the
+                       # combined LLM output (Wave 4c-1) so the descriptions
+                       # pipeline no longer needs a separate LLM call per fn.
 
 
 class CallerClassification(BaseModel):
@@ -25,12 +27,32 @@ class CallerClassification(BaseModel):
     note: str = ""                 # 1-sentence rationale
 
 
+class ImpactHardcodedArtifact(BaseModel):
+    """One load-bearing literal value in the function. Mirrors the
+    existing ``HardcodedArtifact`` from ``winkers.descriptions.models``
+    but lives here so impact.json can be parsed without importing the
+    descriptions package (avoids cycles)."""
+    value: str | list[str]
+    # kind: count | identifier | id_list | phrase | threshold | route | other
+    kind: str
+    context: str
+    surface: str | None = None
+
+
 class ImpactReport(BaseModel):
-    """One function's pre-computed risk analysis."""
+    """One function's pre-computed risk analysis + embedding-grade description.
+
+    Wave 4c-1 added `description` and `hardcoded_artifacts` so the
+    units pipeline pulls function-unit description text from here
+    rather than spawning a second LLM call. Both are optional —
+    pre-v3 reports loaded from disk simply omit them.
+    """
     content_hash: str
     risk_level: str                # low | medium | high | critical
     risk_score: float              # 0.0 — 1.0
-    summary: str                   # 1-2 sentence description
+    summary: str                   # 1-2 sentence description (short, used as `intent` field)
+    description: str = ""          # 70-120w prose for embedding index; "" until v3
+    hardcoded_artifacts: list[ImpactHardcodedArtifact] = []  # load-bearing literals; [] until v3
     caller_classifications: list[CallerClassification] = []
     safe_operations: list[str] = []
     dangerous_operations: list[str] = []
@@ -77,11 +99,21 @@ class FunctionContext:
 
 @dataclass
 class AnalysisResult:
-    """Combined LLM output — intent + impact in one response.
+    """Combined LLM output — intent + impact + description in one response.
 
-    `primary_intent` → writes to FunctionNode.intent.
-    `secondary_intents` → writes to FunctionNode.secondary_intents.
-    The rest → writes to ImpactReport fields.
+    Wave 4c-1: also carries the embedding-grade `description` and
+    `hardcoded_artifacts`. Field provenance:
+
+    - `primary_intent` → ``FunctionNode.intent`` (short tag).
+    - `secondary_intents` → ``FunctionNode.secondary_intents``.
+    - `description` → ``units.json::function_unit.description`` (paragraph).
+    - `hardcoded_artifacts` → ``units.json::function_unit.hardcoded_artifacts``.
+    - The rest → ``ImpactReport`` fields.
+
+    Both `description` and `hardcoded_artifacts` default to empty so
+    older single-response parsers (or LLM responses missing these
+    fields) keep working — the units pipeline falls back to its
+    standalone description-author call when description comes back blank.
     """
     primary_intent: str
     secondary_intents: list[str]
@@ -92,3 +124,5 @@ class AnalysisResult:
     safe_operations: list[str]
     dangerous_operations: list[str]
     action_plan: str
+    description: str = ""
+    hardcoded_artifacts: list[ImpactHardcodedArtifact] = field(default_factory=list)

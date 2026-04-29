@@ -156,10 +156,49 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
 
     # ── 3. Author descriptions for stale function units ────────────────
     if stale_fn_ids:
+        # Wave 4d: function_units that the impact pass already enriched
+        # carry `description` directly on the unit dict. Bring them up
+        # to spec (anchor + source_hash) without a second LLM call.
+        # Anything still missing falls through to the legacy
+        # `author_function_description` route below.
+        existing_by_id = {u.get("id"): u for u in units if u.get("id")}
+
+        reused_from_impact = 0
+        still_stale: set[str] = set()
+        for fn_id in stale_fn_ids:
+            existing = existing_by_id.get(fn_id)
+            if not existing or not existing.get("description"):
+                still_stale.add(fn_id)
+                continue
+            fn = graph.functions.get(fn_id)
+            if fn is None:
+                still_stale.add(fn_id)
+                continue
+            display_name = (
+                f"{fn.class_name}.{fn.name}" if fn.class_name else fn.name
+            )
+            # Merge graph anchor / source_hash onto the impact-authored
+            # unit (impact pass writes a partial stub).
+            existing.setdefault("kind", "function_unit")
+            existing["name"] = display_name
+            existing["anchor"] = {
+                "file": fn.file,
+                "fn": fn.name,
+                **({"class": fn.class_name} if fn.class_name else {}),
+            }
+            existing["source_hash"] = fn.ast_hash
+            reused_from_impact += 1
+            stats["fn_described"] += 1
+        if reused_from_impact:
+            store.save(units)
+            click.echo(
+                f"  Reused {reused_from_impact} description(s) from impact pass."
+            )
+
         # Build per-fn contexts up front (sync, cheap) so the parallel
         # phase only does the slow work (`claude --print`).
         fn_contexts: list[dict] = []
-        for fn_id in sorted(stale_fn_ids):
+        for fn_id in sorted(still_stale):
             fn = graph.functions.get(fn_id)
             if fn is None:
                 continue
@@ -346,9 +385,36 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
                         stats["data_described"] += 1
                     bar.update(1)
 
+    # ── 4c. Promote value_locked_collections into units (Wave 4b) ──────
+    # Structural only — no LLM. The summary embeds value names so
+    # find_work_area / orient(task) can match queries like "status enum"
+    # against the collection. LLM-authored description lands in 4c.
+    from winkers.value_locked import build_value_units
+    value_units = build_value_units(graph, root)
+    live_value_ids = {u["id"] for u in value_units}
+    for vu in value_units:
+        units = store.upsert(units, vu)
+
+    # ── 4d. Promote classes + class attributes into units (Wave 5a) ────
+    # Structural only — class_unit + attribute_unit kinds. Lets
+    # `find_work_area` rank Client model in "audit Client class" and
+    # before_create resolve `Client.invoices` to a real graph node.
+    from winkers.class_attrs import build_attribute_units, build_class_units
+    class_units = build_class_units(graph, root)
+    attribute_units = build_attribute_units(graph, root)
+    live_class_ids = {u["id"] for u in class_units}
+    live_attr_ids = {u["id"] for u in attribute_units}
+    for cu in class_units:
+        units = store.upsert(units, cu)
+    for au in attribute_units:
+        units = store.upsert(units, au)
+
     # ── 5. Prune orphans ────────────────────────────────────────────────
     units = store.prune_orphans(
         units, live_fn_ids, live_template_ids, live_data_ids,
+        live_value_ids=live_value_ids,
+        live_class_ids=live_class_ids,
+        live_attr_ids=live_attr_ids,
     )
 
     # ── 6. Coupling aggregator ──────────────────────────────────────────
@@ -464,6 +530,9 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     from winkers.value_locked import detect_value_locked
     detect_value_locked(graph, root)
 
+    from winkers.class_attrs import detect_class_attrs
+    detect_class_attrs(graph, root)
+
     _collect_git_history(root, graph)
 
     store = GraphStore(root)
@@ -484,6 +553,8 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     )
 
     _repair_sessions(root)
+    _gc_runtime_sessions(root)
+    _detect_and_lock_language(root)
     _run_debt_analysis(root, graph)
 
     if not no_semantic:
@@ -624,6 +695,38 @@ def _collect_git_history(root: Path, graph) -> None:
 
     if count:
         click.echo(f"  [ok] Git history: {count} files with commits")
+
+
+def _gc_runtime_sessions(root: Path) -> None:
+    """Sweep stale per-Claude-session runtime dirs (hooks.log, audit.json, ...)."""
+    try:
+        from winkers.session.session_dir import gc_old_sessions
+        removed = gc_old_sessions(root)
+        if removed:
+            click.echo(f"  Cleaned up {removed} stale session director(y/ies).")
+    except Exception:
+        # GC must never block init.
+        pass
+
+
+def _detect_and_lock_language(root: Path) -> None:
+    """Lock English as the description-authoring language by default.
+
+    Universal English wins for retrieval — BGE-M3 has more weight on
+    English data and domain terms are usually English regardless of
+    project. The lock is idempotent: if the user has set
+    `[project].language` already (even to a non-English value), we
+    keep their choice. To re-detect dominant project language manually,
+    `winkers.project_config.detect_project_language(root)` is exposed
+    as a helper.
+    """
+    try:
+        from winkers.project_config import save_project_language
+        # save_project_language is a no-op if `[project].language` is
+        # already set, so this just seeds new projects.
+        save_project_language(root, "en")
+    except Exception:
+        pass
 
 
 def _repair_sessions(root: Path) -> None:
@@ -3081,6 +3184,17 @@ def hook_stop_audit_spawn(path: str):
     import sys
 
     root = Path(path).resolve()
+
+    # Read session_id from Claude Code's hook payload before detaching;
+    # the child runs with stdin=DEVNULL so we forward via env.
+    session_id = ""
+    try:
+        payload = sys.stdin.read()
+        if payload:
+            session_id = str(json.loads(payload).get("session_id", ""))
+    except Exception:
+        session_id = ""
+
     # Path to our own CLI — same one currently executing.
     winkers_bin = sys.executable
     if winkers_bin.lower().endswith("python.exe") or \
@@ -3092,12 +3206,17 @@ def hook_stop_audit_spawn(path: str):
         # Likely the installed `winkers.exe` entry point.
         cmd = [winkers_bin, "hook", "stop-audit", str(root)]
 
+    child_env = os.environ.copy()
+    if session_id:
+        child_env["WINKERS_SESSION_ID"] = session_id
+
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
         "cwd": str(root),
+        "env": child_env,
     }
     if sys.platform == "win32":
         # Detach so the child outlives the parent SessionEnd hook.

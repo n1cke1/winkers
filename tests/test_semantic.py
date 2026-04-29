@@ -51,9 +51,16 @@ def test_store_load_nonexistent(sem_store):
 
 
 def test_store_save_creates_dir(tmp_path):
-    store = SemanticStore(tmp_path / "sub" / "project")
+    """Wave 4a: persistence moved to project.json. We just need *some*
+    durable on-disk state — the path attribute on the shim is preserved
+    for legacy callers but no longer the primary I/O target."""
+    from winkers.project import PROJECT_FILE
+    from winkers.store import STORE_DIR
+
+    project_root = tmp_path / "sub" / "project"
+    store = SemanticStore(project_root)
     store.save(SemanticLayer())
-    assert store.semantic_path.exists()
+    assert (project_root / STORE_DIR / PROJECT_FILE).exists()
 
 
 # --- Helpers ---

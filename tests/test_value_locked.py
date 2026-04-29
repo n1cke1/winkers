@@ -79,6 +79,228 @@ class TestDetector:
 
 
 # ---------------------------------------------------------------------------
+# value_unit promotion (Wave 4b)
+# ---------------------------------------------------------------------------
+
+class TestValueUnitPromotion:
+    """`build_value_units(graph, root)` converts the detector's
+    `value_locked_collections` into `units.json` records."""
+
+    def _build(self, root: Path):
+        g = GraphBuilder().build(root)
+        CrossFileResolver().resolve(g, str(root))
+        from winkers.value_locked import detect_value_locked
+        detect_value_locked(g, root)
+        return g
+
+    def test_id_format(self):
+        from winkers.value_locked import value_unit_id
+        assert value_unit_id("status.py", "VALID_STATUSES") == (
+            "value:status.py::VALID_STATUSES"
+        )
+
+    def test_emits_one_unit_per_collection(self, tmp_path: Path):
+        from winkers.value_locked import build_value_units
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "status.py").write_text(
+            'VALID_STATUSES = {"draft", "sent", "paid"}\n'
+            'PRIORITIES = {1, 2, 3}\n\n'
+            'def is_valid(s): return s in VALID_STATUSES\n',
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        units = build_value_units(g, proj)
+        # Two collections → two units
+        ids = sorted(u["id"] for u in units)
+        assert ids == [
+            "value:status.py::PRIORITIES",
+            "value:status.py::VALID_STATUSES",
+        ]
+
+    def test_unit_shape_basics(self, tmp_path: Path):
+        from winkers.value_locked import build_value_units
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "status.py").write_text(
+            'VALID_STATUSES = {"draft", "sent", "paid"}\n\n'
+            'def is_valid(s): return s in VALID_STATUSES\n',
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        units = build_value_units(g, proj)
+        u = next(
+            x for x in units if x["id"] == "value:status.py::VALID_STATUSES"
+        )
+        assert u["kind"] == "value_unit"
+        assert u["name"] == "VALID_STATUSES"
+        assert u["anchor"]["file"] == "status.py"
+        assert u["anchor"]["line"] >= 1
+        assert set(u["values"]) == {"draft", "sent", "paid"}
+        assert u["consumer_count"] >= 1
+        assert "status.py" in u["consumer_files"]
+        assert len(u["source_hash"]) == 64  # SHA-256 hex
+        assert u["description"] == ""  # filled later by Wave 4c
+
+    def test_summary_includes_value_names(self, tmp_path: Path):
+        """Summary surfaces value names so embeddings can match queries
+        like 'status enum' even before LLM description lands."""
+        from winkers.value_locked import build_value_units
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "status.py").write_text(
+            'VALID_STATUSES = {"draft", "sent", "paid"}\n\n'
+            'def is_valid(s): return s in VALID_STATUSES\n',
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        units = build_value_units(g, proj)
+        u = units[0]
+        assert "VALID_STATUSES" in u["summary"]
+        # All three values appear as repr'd strings in the summary
+        for v in ("'draft'", "'sent'", "'paid'"):
+            assert v in u["summary"]
+
+    def test_summary_truncates_at_six_values(self, tmp_path: Path):
+        from winkers.value_locked import build_value_units
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        big = ", ".join(f'"v{i}"' for i in range(10))
+        (proj / "status.py").write_text(
+            f"BIG = {{{big}}}\n\n"
+            "def is_valid(s): return s in BIG\n",
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        units = build_value_units(g, proj)
+        u = units[0]
+        assert "(+4)" in u["summary"]  # 10 - 6 = 4 hidden
+
+    def test_cross_file_consumer_files_listed(self, tmp_path: Path):
+        from winkers.value_locked import build_value_units
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "status.py").write_text(
+            'VALID_STATUSES = {"draft", "sent"}\n\n'
+            "def is_valid(s): return s in VALID_STATUSES\n",
+            encoding="utf-8",
+        )
+        (proj / "service.py").write_text(
+            "from status import VALID_STATUSES\n\n"
+            "def normalize(x):\n"
+            "    if x not in VALID_STATUSES:\n"
+            "        return 'draft'\n"
+            "    return x\n",
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        units = build_value_units(g, proj)
+        u = next(x for x in units if x["name"] == "VALID_STATUSES")
+        assert "status.py" in u["consumer_files"]
+        assert "service.py" in u["consumer_files"]
+        assert u["consumer_count"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# Cross-file consumer detection (Wave 3.5 — Gap 2 fix)
+# ---------------------------------------------------------------------------
+
+class TestCrossFileConsumers:
+    """`_find_referencing_fns` now walks `graph.import_edges` so consumer
+    functions in modules OTHER than the collection's defining file are
+    captured in `referenced_by_fns`."""
+
+    def _build(self, root: Path):
+        g = GraphBuilder().build(root)
+        CrossFileResolver().resolve(g, str(root))
+        detect_value_locked(g, root)
+        return g
+
+    def _seed_status_module(self, proj: Path) -> None:
+        """Status module with a function so GraphBuilder includes the file
+        (collection-only files are otherwise pruned)."""
+        (proj / "status.py").write_text(
+            'VALID_STATUSES = {"draft", "sent", "paid"}\n\n'
+            "def is_valid(s: str) -> bool:\n"
+            "    return s in VALID_STATUSES\n",
+            encoding="utf-8",
+        )
+
+    def test_cross_module_consumer_in_referenced_by(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        self._seed_status_module(proj)
+        (proj / "service.py").write_text(
+            "from status import VALID_STATUSES\n\n"
+            "def normalize(status: str) -> str:\n"
+            '    if status not in VALID_STATUSES:\n'
+            '        return "draft"\n'
+            "    return status\n",
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        col = next(
+            c for c in g.value_locked_collections if c.name == "VALID_STATUSES"
+        )
+        # `service::normalize` is in another file but imports + uses
+        # VALID_STATUSES — must show up in referenced_by_fns now.
+        assert any("service.py::normalize" in fid for fid in col.referenced_by_fns)
+
+    def test_cross_module_caller_literal_uses_counted(self, tmp_path: Path):
+        """End-to-end: when a cross-module consumer exists, callers passing
+        literals from the collection also get counted via the existing
+        pass-2 walk over `call_edges`."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        self._seed_status_module(proj)
+        (proj / "service.py").write_text(
+            "from status import VALID_STATUSES\n\n"
+            "def normalize(status: str) -> str:\n"
+            '    if status not in VALID_STATUSES:\n'
+            '        return "draft"\n'
+            "    return status\n",
+            encoding="utf-8",
+        )
+        (proj / "caller.py").write_text(
+            "from service import normalize\n\n"
+            "def main():\n"
+            '    return normalize("sent")\n',
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        col = next(
+            c for c in g.value_locked_collections if c.name == "VALID_STATUSES"
+        )
+        # Caller passes "sent" to normalize() which is now a registered
+        # consumer of VALID_STATUSES → "sent" must be in literal_uses.
+        assert col.literal_uses.get("sent", 0) >= 1
+
+    def test_unrelated_import_no_body_match(self, tmp_path: Path):
+        """Files that import from the module but never mention the
+        collection name in their bodies are skipped by the body-match
+        pre-filter, so unrelated functions don't pollute
+        referenced_by_fns."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        self._seed_status_module(proj)
+        (proj / "other.py").write_text(
+            "from status import is_valid\n\n"
+            "def use_other():\n"
+            "    return is_valid('draft')\n",
+            encoding="utf-8",
+        )
+        g = self._build(proj)
+        col = next(
+            c for c in g.value_locked_collections if c.name == "VALID_STATUSES"
+        )
+        # `other.py::use_other` doesn't textually reference VALID_STATUSES
+        # — must not be added to referenced_by_fns.
+        assert not any(
+            "other.py::use_other" in fid for fid in col.referenced_by_fns
+        )
+
+
+# ---------------------------------------------------------------------------
 # diff_collections
 # ---------------------------------------------------------------------------
 
@@ -111,6 +333,114 @@ class TestDiff:
         assert changes[0]["added"] == ["b"]
         assert changes[0]["removed"] == []
         assert changes[0]["affected_literal_uses"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Path 1 literal-blind: count_string_literal_occurrences + string_literal_hits
+# ---------------------------------------------------------------------------
+
+class TestStringLiteralScan:
+    def test_no_values_returns_empty(self, tmp_path):
+        from winkers.value_locked import count_string_literal_occurrences
+        assert count_string_literal_occurrences([], tmp_path) == {}
+
+    def test_finds_quoted_string_in_python(self, tmp_path):
+        from winkers.value_locked import count_string_literal_occurrences
+        (tmp_path / "repo.py").write_text(
+            'def is_active(s):\n    return s == "sent"\n',
+            encoding="utf-8",
+        )
+        hits = count_string_literal_occurrences(["sent"], tmp_path)
+        assert "sent" in hits
+        assert len(hits["sent"]) == 1
+        rel, line, snippet = hits["sent"][0]
+        assert rel == "repo.py"
+        assert line == 2
+        assert "sent" in snippet
+
+    def test_finds_quoted_string_in_sql(self, tmp_path):
+        from winkers.value_locked import count_string_literal_occurrences
+        (tmp_path / "fixtures.sql").write_text(
+            "INSERT INTO invoices (status) VALUES ('paid'), ('void');\n",
+            encoding="utf-8",
+        )
+        hits = count_string_literal_occurrences(["paid", "void"], tmp_path)
+        assert len(hits["paid"]) == 1
+        assert len(hits["void"]) == 1
+
+    def test_skips_unquoted_substring(self, tmp_path):
+        """Bare identifier match is NOT a literal hit."""
+        from winkers.value_locked import count_string_literal_occurrences
+        (tmp_path / "repo.py").write_text(
+            "is_sent_today = True\nstatus_sent_count = 5\n",
+            encoding="utf-8",
+        )
+        hits = count_string_literal_occurrences(["sent"], tmp_path)
+        assert hits["sent"] == []
+
+    def test_excludes_vendored_dirs(self, tmp_path):
+        from winkers.value_locked import count_string_literal_occurrences
+        nm = tmp_path / "node_modules"
+        nm.mkdir()
+        (nm / "junk.js").write_text(
+            'const x = "sent"\n',
+            encoding="utf-8",
+        )
+        # Should be skipped — 0 hits.
+        hits = count_string_literal_occurrences(["sent"], tmp_path)
+        assert hits["sent"] == []
+
+    def test_diff_collections_with_root_attaches_string_hits(self, tmp_path):
+        from winkers.value_locked import diff_collections
+        # Set up a tiny repo that references "sent" in a bare comparison.
+        (tmp_path / "service.py").write_text(
+            'def is_sent(invoice):\n    return invoice.status == "sent"\n',
+            encoding="utf-8",
+        )
+        before = [
+            ValueLockedCollection(
+                name="VALID_STATUSES", file="status.py", line=1, kind="set",
+                values=["draft", "sent", "paid"],
+                literal_uses={},
+                files_with_uses=[],
+            )
+        ]
+        after = [
+            ValueLockedCollection(
+                name="VALID_STATUSES", file="status.py", line=1, kind="set",
+                values=["draft", "paid"],
+                literal_uses={},
+                files_with_uses=[],
+            )
+        ]
+        changes = diff_collections(before, after, root=tmp_path)
+        assert len(changes) == 1
+        assert changes[0]["removed"] == ["sent"]
+        # The repo-wide scan should pick up the bare comparison.
+        hits = changes[0].get("string_literal_hits")
+        assert hits is not None
+        assert hits["total"] == 1
+        assert "service.py" in hits["files"]
+        assert "sent" in hits["by_value"]
+
+    def test_diff_collections_without_root_no_string_hits(self):
+        from winkers.value_locked import diff_collections
+        before = [
+            ValueLockedCollection(
+                name="S", file="x.py", line=1, kind="set",
+                values=["a", "b"], literal_uses={"a": 2},
+                files_with_uses=["y.py"],
+            )
+        ]
+        after = [
+            ValueLockedCollection(
+                name="S", file="x.py", line=1, kind="set",
+                values=["a"], literal_uses={"a": 2},
+                files_with_uses=["y.py"],
+            )
+        ]
+        changes = diff_collections(before, after)  # no root → no scan
+        assert "string_literal_hits" not in changes[0]
 
 
 # ---------------------------------------------------------------------------

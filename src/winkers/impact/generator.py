@@ -256,6 +256,8 @@ class ImpactGenerator:
             safe_operations=list(result.safe_operations),
             dangerous_operations=list(result.dangerous_operations),
             action_plan=result.action_plan,
+            description=result.description,
+            hardcoded_artifacts=list(result.hardcoded_artifacts),
         )
 
     def _build_context(self, fn: FunctionNode) -> FunctionContext:

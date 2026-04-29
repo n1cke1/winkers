@@ -106,6 +106,16 @@ _DOUBLE_COLON_RE = re.compile(
 _CLASS_METHOD_RE = re.compile(
     r"\b([A-Z]\w*)\.([A-Za-z_]\w*)\s*\("
 )
+# "Class.attribute" — capitalised receiver + dotted access, NO trailing `(`.
+# Catches SQLAlchemy `relationship`s and dataclass fields like
+# `Client.invoices`, `Invoice.line_items`. Negative lookahead avoids
+# double-matching anything `_CLASS_METHOD_RE` already grabbed.
+# Lowercase first char on the attr restricts to attribute-like names —
+# nested classes (`Foo.Bar`) and constants (`Module.MAX`) intentionally
+# don't match here.
+_CLASS_ATTR_RE = re.compile(
+    r"\b([A-Z]\w*)\.([a-z]\w*)\b(?!\s*\()"
+)
 # Bare "fn_name(" — a wildcard catch. Stopwords below filter language keywords.
 _FN_CALL_RE = re.compile(
     r"\b([A-Za-z_]\w*)\s*\("
@@ -164,7 +174,16 @@ def extract_explicit_targets(intent: str) -> tuple[set[str], set[str]]:
     for m in _CLASS_METHOD_RE.finditer(remaining):
         fn_names.add(f"{m.group(1)}.{m.group(2)}")
 
-    # 3. Bare `fn_name(` — last resort, filtered by stopwords + min length.
+    # 3. `Class.attribute` (no `(` after) — covers SQLAlchemy `relationship`,
+    # Pydantic / dataclass fields, etc. Multiple attrs in a comma/`and`
+    # list resolve naturally because finditer iterates each occurrence:
+    # "fix Client.invoices, Client.payments, Client.contracts" → 3 targets.
+    # Once `attribute_unit` lands in the graph (Wave 5), these resolve to
+    # real units; until then they fall through to fuzzy-name matching.
+    for m in _CLASS_ATTR_RE.finditer(remaining):
+        fn_names.add(f"{m.group(1)}.{m.group(2)}")
+
+    # 4. Bare `fn_name(` — last resort, filtered by stopwords + min length.
     for m in _FN_CALL_RE.finditer(remaining):
         name = m.group(1)
         if len(name) < _FN_NAME_MIN_LEN:
@@ -190,9 +209,16 @@ class ResolvedTargets:
     paths: list[str] = field(default_factory=list)       # file paths in graph
     functions: list[str] = field(default_factory=list)   # fn_ids
     zones: list[str] = field(default_factory=list)       # zone names
+    # Wave 5a — `Class.attribute` targets (no parens) resolved against
+    # graph.class_attributes. Strings of the form "ClassName.attr"; the
+    # owning file is also added to `paths` so consumer flow that scans
+    # by file still works.
+    attributes: list[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
-        return not (self.paths or self.functions or self.zones)
+        return not (
+            self.paths or self.functions or self.zones or self.attributes
+        )
 
 
 def categorize_intent(intent: str) -> IntentCategory:
@@ -285,6 +311,7 @@ def _resolve_explicit(
     # so _files_block downstream gets migration_cost info even when the
     # agent didn't spell the path.
     fn_files: set[str] = set()
+    matched_names: set[str] = set()
     for name in explicit_fns:
         for fn_id, fn in graph.functions.items():
             if not _fn_name_matches(fn, name):
@@ -294,6 +321,24 @@ def _resolve_explicit(
             if fn_id not in result.functions:
                 result.functions.append(fn_id)
             fn_files.add(fn.file)
+            matched_names.add(name)
+
+    # Wave 5a — Class.attribute resolution. Anything matching `X.y` that
+    # didn't land on a real function is tried against class_attributes.
+    # Both the attribute name AND its owning file go to the result so
+    # downstream consumers (`scope`, `before_create.files_block`) can
+    # treat the file as the work area.
+    for name in explicit_fns - matched_names:
+        if "." not in name:
+            continue
+        for attr in graph.class_attributes:
+            if attr.name != name:
+                continue
+            if not include_tests and is_test_path(attr.file):
+                continue
+            if attr.name not in result.attributes:
+                result.attributes.append(attr.name)
+            fn_files.add(attr.file)
 
     for file in fn_files:
         if file not in result.paths:

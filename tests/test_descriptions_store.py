@@ -178,6 +178,41 @@ def test_prune_drops_dead_template_units(tmp_path):
     assert [u["id"] for u in kept] == ["template:t.html#live"]
 
 
+def test_prune_drops_dead_value_units(tmp_path):
+    """Wave 4b — value_unit gets the same orphan-pruning rule as data/templates."""
+    store = UnitsStore(tmp_path)
+    units = [
+        {"id": "value:status.py::LIVE", "kind": "value_unit"},
+        {"id": "value:status.py::DEAD", "kind": "value_unit"},
+    ]
+    kept = store.prune_orphans(
+        units,
+        live_function_ids=set(),
+        live_template_ids=set(),
+        live_value_ids={"value:status.py::LIVE"},
+    )
+    assert [u["id"] for u in kept] == ["value:status.py::LIVE"]
+
+
+def test_prune_keeps_value_units_when_live_set_is_none(tmp_path):
+    """`live_value_ids=None` (caller didn't run detector) → keep all."""
+    store = UnitsStore(tmp_path)
+    units = [
+        {"id": "value:status.py::A", "kind": "value_unit"},
+        {"id": "value:status.py::B", "kind": "value_unit"},
+    ]
+    kept = store.prune_orphans(
+        units,
+        live_function_ids=set(),
+        live_template_ids=set(),
+        live_value_ids=None,
+    )
+    assert sorted(u["id"] for u in kept) == [
+        "value:status.py::A",
+        "value:status.py::B",
+    ]
+
+
 def test_prune_keeps_manual_traceability_units(tmp_path):
     """Manual concept units always survive — orphan logic is per-kind."""
     store = UnitsStore(tmp_path)
