@@ -2110,6 +2110,98 @@ def conventions_migrate(path: str, yes: bool):
         click.echo("\nNo rules accepted.")
 
 
+@cli.command("cleanup-legacy")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option(
+    "--dry-run", is_flag=True, default=False,
+    help="Print what would be removed without deleting.",
+)
+def cleanup_legacy(path: str, dry_run: bool):
+    """Remove legacy artifacts whose state was migrated to project.json/units.json.
+
+    After Wave 4 of the 0.9.0 redesign these files are no longer the
+    source of truth — they sit on disk as rollback safety nets:
+
+    \b
+      .winkers/semantic.json   -> .winkers/project.json::semantic
+      .winkers/rules/rules.json -> .winkers/project.json::rules
+      .winkers/impact.json     -> .winkers/units.json (per-unit)
+
+    The cleanup is idempotent and skips files whose data hasn't been
+    migrated yet (that would lose state). Run after a successful
+    `winkers init` to reclaim disk space and ensure no consumer
+    accidentally reads the stale legacy copy.
+
+    `--dry-run` prints the plan without touching anything.
+    """
+    from winkers.descriptions.store import UnitsStore
+    from winkers.project import PROJECT_FILE, ProjectStore
+    from winkers.store import STORE_DIR
+
+    root = Path(path).resolve()
+    store_dir = root / STORE_DIR
+
+    legacy_files: list[tuple[str, Path, str]] = []
+
+    # semantic.json — migrated when project.json exists with non-default
+    # semantic section. Conservative: require project.json present.
+    sem = store_dir / "semantic.json"
+    if sem.exists() and (store_dir / PROJECT_FILE).exists():
+        bundle = ProjectStore(root).load()
+        if bundle is not None:
+            legacy_files.append((
+                "semantic.json", sem,
+                f"folded into project.json (semantic section)",
+            ))
+
+    # rules/rules.json — same migration gate.
+    rules = store_dir / "rules" / "rules.json"
+    if rules.exists() and (store_dir / PROJECT_FILE).exists():
+        legacy_files.append((
+            "rules/rules.json", rules,
+            "folded into project.json (rules section)",
+        ))
+
+    # impact.json — migrated when units.json carries function_unit
+    # entries with `risk_level` (set by ImpactStore.save shim).
+    imp = store_dir / "impact.json"
+    if imp.exists():
+        units = UnitsStore(root).load()
+        has_impact = any(
+            u.get("kind") == "function_unit" and u.get("risk_level")
+            for u in units
+        )
+        if has_impact:
+            legacy_files.append((
+                "impact.json", imp,
+                "folded into units.json (per-function risk fields)",
+            ))
+
+    if not legacy_files:
+        click.echo("No legacy artifacts to clean up.")
+        return
+
+    total_bytes = sum(p.stat().st_size for _, p, _ in legacy_files)
+    click.echo(f"Found {len(legacy_files)} legacy file(s), {total_bytes:,} bytes total:")
+    for name, path_, reason in legacy_files:
+        size = path_.stat().st_size
+        click.echo(f"  {name}  ({size:,} bytes) — {reason}")
+
+    if dry_run:
+        click.echo("\n--dry-run: nothing removed.")
+        return
+
+    removed = 0
+    for _, path_, _ in legacy_files:
+        try:
+            path_.unlink()
+            removed += 1
+        except OSError as e:
+            click.echo(f"  WARN: cannot remove {path_}: {e}", err=True)
+
+    click.echo(f"\n[ok] Removed {removed} legacy file(s).")
+
+
 @cli.command()
 @click.argument("path", default=".", type=click.Path(exists=True))
 @click.option("--all", "analyze_all", is_flag=True, default=False,
