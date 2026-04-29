@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+from winkers.hooks._logger import log_hook
+
 
 def run(root: Path) -> None:
     """Read hook JSON from stdin, check for exact clones, deny or allow."""
@@ -14,88 +16,97 @@ def run(root: Path) -> None:
     except Exception:
         sys.exit(0)
 
-    tool_name = hook_data.get("tool_name", "")
-    tool_input = hook_data.get("tool_input", {})
+    session_id = str(hook_data.get("session_id", ""))
 
-    # Only check Write/Edit/MultiEdit tools
-    if tool_name not in ("Write", "Edit", "MultiEdit"):
-        sys.exit(0)
+    with log_hook(root, session_id, "PreToolUse", "pre_write") as rec:
+        tool_name = hook_data.get("tool_name", "")
+        tool_input = hook_data.get("tool_input", {})
+        rec["tool"] = tool_name
 
-    file_path = tool_input.get("file_path", "")
-    if not file_path:
-        sys.exit(0)
+        if tool_name not in ("Write", "Edit", "MultiEdit"):
+            sys.exit(0)
 
-    # Normalize to relative path
-    try:
-        rel_path = str(Path(file_path).relative_to(root)).replace("\\", "/")
-    except ValueError:
-        rel_path = file_path.replace("\\", "/")
+        file_path = tool_input.get("file_path", "")
+        if not file_path:
+            sys.exit(0)
 
-    # Load graph
-    from winkers.store import GraphStore
+        # Normalize to relative path
+        try:
+            rel_path = str(Path(file_path).relative_to(root)).replace("\\", "/")
+        except ValueError:
+            rel_path = file_path.replace("\\", "/")
+        rec["file"] = rel_path
 
-    store = GraphStore(root)
-    graph = store.load()
-    if graph is None:
-        sys.exit(0)
+        # Load graph
+        from winkers.store import GraphStore
 
-    # Get content being written
-    content = tool_input.get("file_text", "") or tool_input.get("content", "")
-    if not content:
-        sys.exit(0)
+        store = GraphStore(root)
+        graph = store.load()
+        if graph is None:
+            rec["outcome"] = "no_graph"
+            sys.exit(0)
 
-    # Check for exact clones using AST hash
-    from winkers.detection.duplicates import find_duplicates
+        # Get content being written
+        content = tool_input.get("file_text", "") or tool_input.get("content", "")
+        if not content:
+            sys.exit(0)
 
-    # Get functions in the target file after potential write
-    file_node = graph.files.get(rel_path)
-    if file_node is None:
-        sys.exit(0)
+        # Check for exact clones using AST hash
+        from winkers.detection.duplicates import find_duplicates
 
-    new_fn_ids = file_node.function_ids
-    if not new_fn_ids:
-        sys.exit(0)
+        # Get functions in the target file after potential write
+        file_node = graph.files.get(rel_path)
+        if file_node is None:
+            sys.exit(0)
 
-    duplicates = find_duplicates(graph, new_fn_ids)
-    exact_clones = [d for d in duplicates if d.kind == "exact"]
-    near_clones = [d for d in duplicates if d.kind == "near"]
+        new_fn_ids = file_node.function_ids
+        if not new_fn_ids:
+            sys.exit(0)
 
-    if exact_clones:
-        # Deny with import suggestion
-        clone = exact_clones[0]
-        msg = (
-            f"[Winkers] BLOCKED: {clone.fn_a.name}() is an exact clone of "
-            f"{clone.fn_b.name}() in {clone.fn_b.file}:{clone.fn_b.line_start}. "
-            f"Import and reuse instead of duplicating."
-        )
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": msg,
-            }
-        }), file=sys.stderr)
-        sys.exit(2)
+        duplicates = find_duplicates(graph, new_fn_ids)
+        exact_clones = [d for d in duplicates if d.kind == "exact"]
+        near_clones = [d for d in duplicates if d.kind == "near"]
+        rec["exact_clones"] = len(exact_clones)
+        rec["near_clones"] = len(near_clones)
 
-    if near_clones:
-        # Allow with warning
-        warnings = []
-        for nc in near_clones[:3]:
-            warnings.append(
-                f"  - {nc.fn_a.name}() is similar to {nc.fn_b.name}() "
-                f"in {nc.fn_b.file}:{nc.fn_b.line_start} "
-                f"(similarity: {nc.similarity:.0%})"
+        if exact_clones:
+            # Deny with import suggestion
+            clone = exact_clones[0]
+            msg = (
+                f"[Winkers] BLOCKED: {clone.fn_a.name}() is an exact clone of "
+                f"{clone.fn_b.name}() in {clone.fn_b.file}:{clone.fn_b.line_start}. "
+                f"Import and reuse instead of duplicating."
             )
-        output = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "permissionDecisionReason": (
-                    "[Winkers] Similar functions found:\n" + "\n".join(warnings)
-                    + "\nConsider reusing existing code."
-                ),
-            }
-        }
-        print(json.dumps(output))
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": msg,
+                }
+            }), file=sys.stderr)
+            rec["decision"] = "deny"
+            sys.exit(2)
 
-    sys.exit(0)
+        if near_clones:
+            # Allow with warning
+            warnings = []
+            for nc in near_clones[:3]:
+                warnings.append(
+                    f"  - {nc.fn_a.name}() is similar to {nc.fn_b.name}() "
+                    f"in {nc.fn_b.file}:{nc.fn_b.line_start} "
+                    f"(similarity: {nc.similarity:.0%})"
+                )
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": (
+                        "[Winkers] Similar functions found:\n" + "\n".join(warnings)
+                        + "\nConsider reusing existing code."
+                    ),
+                }
+            }
+            print(json.dumps(output))
+            rec["decision"] = "allow_with_warning"
+
+        sys.exit(0)

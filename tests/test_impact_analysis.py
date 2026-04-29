@@ -188,6 +188,102 @@ class TestPromptParser:
         assert "modules/pricing.py" in prompt
         assert "no callers" in prompt.lower()
 
+    # ── Wave 4c-1: combined prompt now also requests description + artifacts ──
+
+    def test_prompt_requests_description_and_artifacts(self, graph):
+        fn = graph.functions["modules/pricing.py::calculate_price"]
+        ctx = FunctionContext(fn=fn, source="def calculate_price(): pass", callers=[])
+        prompt = build_prompt(ctx)
+        # Both new fields appear in the schema and rules sections.
+        assert '"description"' in prompt
+        assert '"hardcoded_artifacts"' in prompt
+        assert "DESCRIPTION rules" in prompt
+        assert "HARDCODED_ARTIFACTS rules" in prompt
+
+    def test_parses_description_and_artifacts(self):
+        payload = {
+            "primary_intent": "computes price",
+            "secondary_intents": ["rounding"],
+            "risk_level": "low", "risk_score": 0.1,
+            "summary": "Computes total price.",
+            "description": (
+                "Calculates the total price for a list of invoice line items "
+                "using rounding mode 'half-even'. Called by checkout flow when "
+                "the user clicks Pay. Domain phrases: 'invoice total', "
+                "'price calculation', 'half-even rounding'. Critical detail: "
+                "round() applies ONLY to the final sum, not per-item subtotals "
+                "— changing this silently shifts ledger reconciliation."
+            ),
+            "hardcoded_artifacts": [
+                {
+                    "value": "half-even",
+                    "kind": "phrase",
+                    "context": "rounding mode constant",
+                    "surface": "ROUND_HALF_EVEN",
+                },
+                {
+                    "value": ["draft", "paid", "sent"],
+                    "kind": "id_list",
+                    "context": "valid invoice statuses",
+                },
+            ],
+            "caller_classifications": [],
+            "safe_operations": [],
+            "dangerous_operations": [],
+            "action_plan": "",
+        }
+        result = parse_response(json.dumps(payload))
+        assert result is not None
+        assert "Calculates the total price" in result.description
+        assert len(result.hardcoded_artifacts) == 2
+        # Artifacts are validated and canonical-form preserved.
+        kinds = {a.kind for a in result.hardcoded_artifacts}
+        assert kinds == {"phrase", "id_list"}
+        # id_list value is normalized: list[str] sorted alphabetically.
+        id_list = next(
+            a for a in result.hardcoded_artifacts if a.kind == "id_list"
+        )
+        assert id_list.value == ["draft", "paid", "sent"]
+
+    def test_missing_description_defaults_to_empty(self):
+        """Older LLM responses (or models forgetting the new field) still validate."""
+        payload = {
+            "primary_intent": "x", "secondary_intents": [],
+            "risk_level": "low", "risk_score": 0.1, "summary": "",
+        }
+        result = parse_response(json.dumps(payload))
+        assert result is not None
+        assert result.description == ""
+        assert result.hardcoded_artifacts == []
+
+    def test_drops_invalid_artifact_kind(self):
+        payload = {
+            "primary_intent": "x", "secondary_intents": [],
+            "risk_level": "low", "risk_score": 0.1, "summary": "",
+            "hardcoded_artifacts": [
+                {"value": "v1", "kind": "totally-invalid", "context": "c"},
+                {"value": "v2", "kind": "identifier", "context": "ok"},
+            ],
+        }
+        result = parse_response(json.dumps(payload))
+        assert result is not None
+        assert len(result.hardcoded_artifacts) == 1
+        assert result.hardcoded_artifacts[0].value == "v2"
+
+    def test_caps_artifact_count(self):
+        """Spam guard — at most 30 artifacts retained."""
+        payload = {
+            "primary_intent": "x", "secondary_intents": [],
+            "risk_level": "low", "risk_score": 0.1, "summary": "",
+            "hardcoded_artifacts": [
+                {"value": f"v{i}", "kind": "identifier", "context": "c"}
+                for i in range(50)
+            ],
+        }
+        result = parse_response(json.dumps(payload))
+        assert result is not None
+        assert len(result.hardcoded_artifacts) == 30
+
 
 # ---------------------------------------------------------------------------
 # Store
@@ -215,6 +311,80 @@ class TestImpactStore:
         removed = ImpactStore.prune(impact, live_fn_ids={"alive::f"})
         assert removed == 1
         assert "dead::g" not in impact.functions
+
+    def test_save_persists_through_units_json(self, tmp_path):
+        """Wave 4d — ImpactStore.save writes into units.json, not impact.json."""
+        from winkers.descriptions.store import UnitsStore
+
+        store = ImpactStore(tmp_path)
+        impact = ImpactFile(functions={"x::f": _report()})
+        store.save(impact)
+        # New persistence target:
+        assert (tmp_path / ".winkers" / "units.json").exists()
+        # Legacy path NOT created (only created on migration from existing legacy):
+        assert not (tmp_path / ".winkers" / "impact.json").exists()
+        # And the function lands as a function_unit on units.json:
+        units = UnitsStore(tmp_path).load()
+        u = next(u for u in units if u.get("id") == "x::f")
+        assert u["kind"] == "function_unit"
+        assert u["risk_level"] == "high"
+
+    def test_load_returns_data_persisted_via_save(self, tmp_path):
+        """Round-trip parity through the new units-backed store."""
+        store = ImpactStore(tmp_path)
+        store.save(ImpactFile(functions={"a::b": _report()}))
+        loaded = store.load()
+        assert "a::b" in loaded.functions
+        assert loaded.functions["a::b"].risk_level == "high"
+
+    def test_migration_from_legacy_impact_json(self, tmp_path):
+        """If legacy impact.json sits on disk and units.json has no impact
+        data yet, ImpactStore.load() folds the legacy data into units.json."""
+        import json as _json
+
+        from winkers.descriptions.store import UnitsStore
+
+        store_dir = tmp_path / ".winkers"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        # Legacy file with current schema_version so it's not discarded.
+        (store_dir / "impact.json").write_text(_json.dumps({
+            "schema_version": "3",
+            "meta": {"llm_model": "legacy-model", "functions_analyzed": 1},
+            "functions": {
+                "y::g": {
+                    "content_hash": "h1",
+                    "risk_level": "medium",
+                    "risk_score": 0.4,
+                    "summary": "legacy summary",
+                    "caller_classifications": [],
+                    "safe_operations": [],
+                    "dangerous_operations": [],
+                    "action_plan": "",
+                    "description": "",
+                    "hardcoded_artifacts": [],
+                },
+            },
+        }), encoding="utf-8")
+
+        loaded = ImpactStore(tmp_path).load()
+        assert "y::g" in loaded.functions
+        assert loaded.functions["y::g"].risk_level == "medium"
+        assert loaded.meta.llm_model == "legacy-model"
+
+        # After migration, units.json carries the data — second load is direct.
+        units = UnitsStore(tmp_path).load()
+        u = next(u for u in units if u.get("id") == "y::g")
+        assert u["kind"] == "function_unit"
+        assert u["risk_level"] == "medium"
+
+        # Legacy impact.json is intentionally left on disk (rollback safety).
+        assert (store_dir / "impact.json").exists()
+
+    def test_exists_true_when_unit_has_impact(self, tmp_path):
+        store = ImpactStore(tmp_path)
+        assert store.exists() is False
+        store.save(ImpactFile(functions={"a::b": _report()}))
+        assert store.exists() is True
 
     def test_load_discards_outdated_schema_version(self, tmp_path):
         """A stale schema_version on disk triggers regeneration (returns empty)."""

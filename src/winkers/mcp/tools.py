@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
@@ -26,6 +27,13 @@ def register_tools(
                 name="orient",
                 description=(
                     "IMPORTANT: Call this FIRST."
+                    " Provide your task in `task` (mandatory): a one-sentence"
+                    " description of what was assigned to you (verb + scope)."
+                    " orient returns the standard project context PLUS"
+                    " `semantic_matches` — top-K relevant units (functions,"
+                    " UI sections, couplings) ranked by embedding similarity"
+                    " against your task. Replaces the prior orient + "
+                    "find_work_area two-step."
                     " Pass `include` as an array of section names,"
                     " e.g. include=['map','rules_list']."
                     " Do NOT serialize as a JSON-encoded string."
@@ -43,6 +51,19 @@ def register_tools(
                 inputSchema={
                     "type": "object",
                     "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "What you were asked to do — verb + scope, one"
+                                " sentence. Examples: 'simplify invoice statuses"
+                                " from 6 to 3', 'fix Client.invoices relationship"
+                                " cascade', 'audit soft-delete consistency across"
+                                " repos'. If exploratory, paste the task verbatim"
+                                " ('explore project structure' is OK). Used for"
+                                " semantic_matches AND registered for post-session"
+                                " task fulfillment audit."
+                            ),
+                        },
                         "include": {
                             "oneOf": [
                                 {"type": "array", "items": {"type": "string"}},
@@ -63,8 +84,14 @@ def register_tools(
                             "type": "integer",
                             "description": "Min callers for hotspots (default 10)",
                         },
+                        "k": {
+                            "type": "integer",
+                            "description": (
+                                "Top-K semantic_matches to return (default 5)."
+                            ),
+                        },
                     },
-                    "required": ["include"],
+                    "required": ["task", "include"],
                 },
             ),
             Tool(
@@ -241,9 +268,11 @@ def register_tools(
             Tool(
                 name="find_work_area",
                 description=(
-                    "Locate where in the codebase to make a change."
-                    " CALL THIS FIRST when given a natural-language task,"
-                    " before grepping or guessing."
+                    "DEPRECATED — use orient(task=...) instead. orient now"
+                    " always returns semantic_matches against the registered"
+                    " task. find_work_area is kept as an alias for one minor"
+                    " for existing scripts/agents and will be removed."
+                    " Locate where in the codebase to make a change."
                     " Describe the task in 1-2 sentences in any language —"
                     " plain prose, mixing Russian and English domain terms"
                     " is fine."
@@ -446,10 +475,20 @@ def _coerce_include(value: Any) -> list[str]:
 
 
 def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
+    task = (args.get("task") or "").strip()
+    if not task:
+        return {
+            "error": (
+                "task required: provide a one-sentence task description"
+                " (verb + scope, e.g. 'simplify invoice statuses from 6 to 3')."
+            )
+        }
+
     include = _coerce_include(args.get("include", []))
     zone = args.get("zone")
     min_callers = args.get("min_callers", 10)
     max_tokens = args.get("max_tokens", MAX_ORIENT_TOKENS)
+    k = int(args.get("k", 5)) if args.get("k") else 5
 
     builders: dict[str, Any] = {
         "map": lambda: _section_map(graph, zone, root),
@@ -530,7 +569,77 @@ def _tool_orient(graph: Graph, args: dict, root: Path) -> dict:
     if session_info:
         result["session"] = session_info
 
+    # Always compute semantic_matches against the registered task — this is
+    # the merged orient + find_work_area pathway (Wave 2 of the redesign).
+    fwa = _tool_find_work_area(graph, {"query": task, "k": k}, root)
+    if "matches" in fwa:
+        result["semantic_matches"] = fwa.get("matches", [])
+        result["semantic_verdict"] = fwa.get("verdict", "EMPTY")
+        result["semantic_top_score"] = fwa.get("max_score", 0.0)
+    else:
+        # Index missing / warming / empty — surface a hint but don't fail
+        # the whole orient call (the session-context sections are still
+        # useful even without semantic ranking).
+        result["semantic_matches"] = []
+        hint = fwa.get("hint") or fwa.get("error") or "semantic index unavailable"
+        result["semantic_hint"] = hint
+
+    task_warnings = _validate_task(task, result.get("semantic_matches", []))
+    if task_warnings:
+        result["task_warnings"] = task_warnings
+
     return result
+
+
+# Soft-validation thresholds for the orient(task) parameter.
+# These are diagnostics, not gates — the agent always gets results; warnings
+# are surface-level guidance per the "Intent formation rules" concept (Wave 2).
+_TASK_MIN_WORDS = 3
+_TASK_MULTI_RE = re.compile(r"\band\b|&", re.IGNORECASE)
+_TASK_VERB_RE = re.compile(
+    r"\b(create|change|fix|add|refactor|extract|remove|rename|audit"
+    r"|simplify|implement|update|build|delete|move)\b",
+    re.IGNORECASE,
+)
+_TASK_MIN_GOOD_SCORE = 0.5
+
+
+def _validate_task(task: str, matches: list[dict]) -> list[str]:
+    """Return human-readable warnings when the task is structurally weak.
+
+    Three checks today (CONCEPT.md §6 "Intent formation rules"):
+      * too short  → likely missing verb or scope
+      * multi-task → 'and'/'&' plus ≥2 verbs dilute the audit signal
+      * no matches → no semantic_matches scored above threshold
+    """
+    warnings: list[str] = []
+    words = [w for w in task.split() if w]
+
+    if len(words) < _TASK_MIN_WORDS:
+        warnings.append(
+            "task is very short — recommend adding a verb + scope"
+            " (e.g. 'fix Class.method', 'audit X consistency')."
+        )
+
+    if _TASK_MULTI_RE.search(task):
+        verbs = _TASK_VERB_RE.findall(task)
+        if len(verbs) >= 2:
+            warnings.append(
+                "task looks multi-task (has 'and/&' plus multiple verbs)"
+                " — split into separate orient/before_create cycles for"
+                " cleaner audit and risk gates."
+            )
+
+    if matches:
+        top_score = max((m.get("score", 0.0) for m in matches), default=0.0)
+        if top_score < _TASK_MIN_GOOD_SCORE:
+            warnings.append(
+                f"task didn't match any indexed area well"
+                f" (top score {top_score:.2f} < {_TASK_MIN_GOOD_SCORE})"
+                " — rephrase with a named target or domain term."
+            )
+
+    return warnings
 
 
 def _section_map(graph: Graph, zone_filter: str | None, root: Path) -> dict:
@@ -1209,7 +1318,11 @@ def _tool_impact_check(
 
     # 4b. Value-domain change detection
     from winkers.value_locked import diff_collections
-    value_changes = diff_collections(old_value_locked, graph.value_locked_collections)
+    value_changes = diff_collections(
+        old_value_locked,
+        graph.value_locked_collections,
+        root=root,
+    )
 
     # 5. Coherence check
     coherence = _coherence_check(file_path, root)
@@ -1343,91 +1456,124 @@ def _session_status(root: Path) -> dict | None:
 
 
 def _tool_session_done(graph: Graph, root: Path) -> dict:
-    """Session audit: PASS if no unresolved issues, FAIL otherwise."""
+    """Session audit — Wave 6 three-tier verdict (PASS / WARN / FAIL).
+
+    Criteria (CONCEPT.md §5):
+
+    FAIL — high precision, structural breakage:
+      - Unresolved `broken_caller` warnings (signature changed but callers
+        not updated).
+      - `coherence` rule with `fix_approach=sync` whose sync_with files
+        were not touched.
+      - Complexity-delta regression beyond budget.
+
+    WARN — soft signals that don't block:
+      - Writes happened but no `before_create` was registered for the
+        session (terra incognita choice — surface but don't fail).
+      - `value_locked` warnings still present (literal_hits surfaced
+        by post_write but neither resolved nor blocking).
+      - `coherence` rules with `fix_approach=derived|refactor`.
+
+    PASS — none of the above.
+
+    Anti-loop: on the second+ call we still report the same status —
+    Wave 6 dropped the prior "always PASS on repeat" behaviour because
+    the Stop hook no longer forces continuation; agents calling
+    session_done() repeatedly just get the current verdict.
+    """
     from winkers.session.state import SessionStore
 
     session_store = SessionStore(root)
     session = session_store.load_or_create()
 
     session.session_done_calls += 1
-    is_first_call = session.session_done_calls == 1
 
-    # Collect issues
-    issues: list[dict] = []
+    issues: list[dict] = []        # FAIL-level
+    warnings_list: list[dict] = []  # WARN-level
     recommendations: list[dict] = []
 
-    if is_first_call:
-        # 1. Unresolved broken callers
-        for w in session.pending_warnings():
-            if w.kind == "broken_caller":
-                callers_info = _broken_caller_details(w.target, graph)
+    # FAIL — broken callers
+    for w in session.pending_warnings():
+        if w.kind == "broken_caller":
+            callers_info = _broken_caller_details(w.target, graph)
+            issues.append({
+                "kind": "broken_caller",
+                "detail": w.detail,
+                "call_sites": callers_info,
+            })
+
+    # FAIL / recommendation — coherence sync_with vs derived
+    modified_files = set(session.files_modified())
+    for w in session.pending_warnings():
+        if w.kind != "coherence":
+            continue
+        if w.fix_approach == "sync":
+            sync_files = _extract_sync_files(w, root)
+            unmodified = [f for f in sync_files if f not in modified_files]
+            if unmodified:
                 issues.append({
-                    "kind": "broken_caller",
+                    "kind": "coherence_sync",
                     "detail": w.detail,
-                    "call_sites": callers_info,
+                    "unmodified_files": unmodified,
                 })
+        else:
+            recommendations.append({
+                "kind": f"coherence_{w.fix_approach or 'derived'}",
+                "detail": w.detail,
+            })
 
-        # 2. Coherence sync_with not modified
-        modified_files = set(session.files_modified())
-        for w in session.pending_warnings():
-            if w.kind != "coherence":
-                continue
-            if w.fix_approach == "sync":
-                # Extract sync_with files from the warning detail
-                sync_files = _extract_sync_files(w, root)
-                unmodified = [f for f in sync_files if f not in modified_files]
-                if unmodified:
-                    issues.append({
-                        "kind": "coherence_sync",
-                        "detail": w.detail,
-                        "unmodified_files": unmodified,
-                    })
-            else:
-                # derived/refactor: don't block, but recommend
-                recommendations.append({
-                    "kind": f"coherence_{w.fix_approach or 'derived'}",
-                    "detail": w.detail,
-                })
+    # FAIL — complexity-delta regression
+    cx_issue = _check_complexity_delta(graph, session)
+    if cx_issue:
+        issues.append(cx_issue)
 
-        # 3. Complexity delta check
-        cx_issue = _check_complexity_delta(graph, session)
-        if cx_issue:
-            issues.append(cx_issue)
+    # WARN — value_locked still pending
+    for w in session.pending_warnings():
+        if w.kind == "value_locked":
+            warnings_list.append({
+                "kind": "value_locked",
+                "severity": w.severity,
+                "detail": w.detail,
+            })
 
-    # Save updated session state
+    # WARN — writes happened but no before_create registered
+    if (
+        len(session.writes) > 0
+        and session.before_create_calls == 0
+    ):
+        warnings_list.append({
+            "kind": "no_intent_registered",
+            "detail": (
+                f"{len(session.writes)} write(s) without a single"
+                " before_create call — terra incognita work, no audit"
+                " axis to verify intent fulfillment."
+            ),
+        })
+
     session_store.save(session)
 
-    # Build response
-    if not is_first_call:
-        # Anti-loop: PASS with remaining warnings on second+ call
-        result: dict = {
-            "status": "PASS",
-            "note": "Session audit passed (repeat call — remaining warnings logged).",
-            "session": session.summary(),
-        }
-        pending = session.pending_warnings()
-        if pending:
-            result["remaining_warnings"] = [w.detail for w in pending[:5]]
-        return result
-
     if issues:
-        result = {
-            "status": "FAIL",
-            "issues": issues,
-            "session": session.summary(),
-            "hint": "Fix the issues above and call session_done() again.",
-        }
-        if recommendations:
-            result["recommendations"] = recommendations
-        return result
+        status = "FAIL"
+    elif warnings_list:
+        status = "WARN"
+    else:
+        status = "PASS"
 
-    result = {
-        "status": "PASS",
+    result: dict = {
+        "status": status,
         "session": session.summary(),
     }
+    if issues:
+        result["issues"] = issues
+        result["hint"] = (
+            "Resolve the issues above. Stop hook will not block; the"
+            " status lands in audit.json and the next session's"
+            " prompt enrichment will surface it."
+        )
+    if warnings_list:
+        result["warnings"] = warnings_list
     if recommendations:
         result["recommendations"] = recommendations
-        result["note"] = "PASS — but consider these improvements."
     return result
 
 
@@ -1912,20 +2058,26 @@ def _before_create_unknown(graph: Graph, intent: str, root: Path) -> dict:
         "intent": intent,
         "error": "Could not parse intent into resolvable targets.",
         "hint": (
-            "Rewrite the intent with explicit markers: function names with"
-            " parentheses (e.g. calculate_price()), Class.method(), or a"
-            " relative file path (e.g. app/repos/invoice.py). Combine them"
-            " for precision: 'refactor calculate_price() in app/pricing.py'."
+            "Rewrite the intent with explicit markers:"
+            " `fn_name()` for functions (e.g. calculate_price()),"
+            " `Class.method()` for methods,"
+            " `Class.attribute` (no parens) for SQLAlchemy relationships,"
+            " Pydantic / dataclass fields, or other attribute-level targets,"
+            " or a relative file path (e.g. app/repos/invoice.py)."
+            " Combine for precision: 'refactor calculate_price() in"
+            " app/pricing.py'. Multiple attrs in one go are fine:"
+            " 'fix Client.invoices, Client.payments, Client.contracts'."
         ),
         "examples": [
             "refactor calculate_price() to round half-even",
             "fix InvoiceRepo.get_with_items() selectinload",
+            "fix Client.invoices, Client.payments cascade",
             "add soft_delete() to app/repos/base.py",
             "rename modules/pricing.py::calc_tax to apply_tax",
         ],
         "fallback": (
             "For architectural context call"
-            " orient(include=['map','conventions','hotspots'])."
+            " orient(task='<your task>', include=['map','conventions','hotspots'])."
         ),
     }
 
@@ -2055,6 +2207,9 @@ _THRESHOLD_FLOOR = 0.45
 _THRESHOLD_GAP = 0.05
 
 
+_FIND_WORK_AREA_TOOL_NAME = "find_work_area"
+
+
 def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
     """Search the description-first units index for relevant code/UI.
 
@@ -2131,6 +2286,15 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
             ),
         }
 
+    # Wave 7 — register a fresh tool-call slot for context dedup. Every
+    # description emitted below either (a) gets suppressed because a
+    # prior tool call within the threshold already showed it, or
+    # (b) gets recorded so a subsequent call can suppress.
+    from winkers.session.seen_units import SeenUnitsRegistry
+    seen_registry = SeenUnitsRegistry.get()
+    call_idx = seen_registry.begin_call(_FIND_WORK_AREA_TOOL_NAME)
+    fresh_emit_ids: list[str] = []
+
     top_score = raw[0][0]
     bottom_score = raw[-1][0]
     gap = top_score - bottom_score
@@ -2174,6 +2338,24 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
                     item["route"] = (
                         f"{fn.http_method or 'GET'} {fn.route}"
                     )
+        elif unit.get("kind") == "value_unit":
+            # value_unit anchors at the collection's defining line.
+            # Surface values + consumer counts directly so the agent
+            # doesn't need a follow-up scope() to see the blast radius.
+            anchor = unit.get("anchor") or {}
+            if anchor.get("file"):
+                item["file"] = anchor["file"]
+            if anchor.get("line"):
+                item["line"] = anchor["line"]
+            values = unit.get("values") or []
+            if values:
+                item["values"] = values
+            count = unit.get("consumer_count")
+            if count is not None:
+                item["consumer_count"] = count
+            consumer_files = unit.get("consumer_files") or []
+            if consumer_files:
+                item["consumer_files"] = consumer_files
         else:
             # traceability_unit: source_files (always) + source_anchors
             # (when LLM extracted fn-level anchors) — enables drill-down.
@@ -2205,8 +2387,28 @@ def _tool_find_work_area(graph: Graph, args: dict, root: Path) -> dict:
             desc = desc[:247] + "..."
         if desc:
             item["description"] = desc
+        # value_unit's description is empty until Wave 4c — use the
+        # structural summary instead so the agent has something useful.
+        elif unit.get("kind") == "value_unit":
+            summary = unit.get("summary") or ""
+            if summary:
+                item["summary"] = summary
+
+        # Wave 7 — context dedup. If this unit was shown with a full
+        # description by a prior tool call inside the threshold window,
+        # swap `description` for a `description_seen_in` marker so the
+        # agent doesn't re-read the heavy paragraph.
+        if "description" in item:
+            seen_registry.maybe_suppress_description(uid, item)
+            if "description" in item:
+                fresh_emit_ids.append(uid)
 
         matches.append(item)
+
+    # Record the IDs whose full description we just emitted. Repeat
+    # calls within the threshold see them as "recently seen" and get
+    # the suppression marker.
+    seen_registry.record(fresh_emit_ids, _FIND_WORK_AREA_TOOL_NAME, call_idx)
 
     advice = _find_work_area_advice(verdict, top_score)
     return {

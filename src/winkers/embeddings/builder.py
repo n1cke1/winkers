@@ -266,13 +266,17 @@ def _embed_text_hash(text: str) -> str:
 def _embed_text_for(unit: dict) -> str:
     """Compose the text we actually embed.
 
-    `name + description` gives stronger signal than description alone —
-    short descriptions get the unit name as anchor; long descriptions
-    benefit from the name as a tie-breaker.
+    `name + summary + description` gives stronger signal than description
+    alone — short descriptions get the unit name as anchor; long
+    descriptions benefit from the name as a tie-breaker. `summary` is a
+    short structural blurb authored by `build_value_units` (Wave 4b)
+    that surfaces the actual collection values, giving BGE-M3 something
+    to match against before LLM-authored descriptions land in Wave 4c.
     """
     name = unit.get("name", "")
+    summary = unit.get("summary", "")
     desc = unit.get("description", "")
-    return f"{name}\n\n{desc}".strip()
+    return "\n\n".join(s for s in (name, summary, desc) if s).strip()
 
 
 def embed_units(

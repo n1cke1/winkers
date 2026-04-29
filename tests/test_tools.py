@@ -428,7 +428,11 @@ def test_orient_truncates_large_response(graph, tmp_path):
     """When max_tokens is tiny, orient truncates and adds a hint."""
     result = _tool_orient(
         graph,
-        {"include": ["map", "functions_graph", "hotspots"], "max_tokens": 50},
+        {
+            "task": "test orient",
+            "include": ["map", "functions_graph", "hotspots"],
+            "max_tokens": 50,
+        },
         tmp_path,
     )
     # map should be included (highest priority, always fits first)
@@ -441,7 +445,7 @@ def test_orient_truncates_large_response(graph, tmp_path):
 def test_orient_no_truncation_within_budget(graph, tmp_path):
     result = _tool_orient(
         graph,
-        {"include": ["map"], "max_tokens": 50000},
+        {"task": "test orient", "include": ["map"], "max_tokens": 50000},
         tmp_path,
     )
     assert "map" in result
@@ -452,7 +456,7 @@ def test_orient_respects_priority_order(graph, tmp_path):
     """map has higher priority than functions_graph."""
     result = _tool_orient(
         graph,
-        {"include": ["functions_graph", "map"], "max_tokens": 50},
+        {"task": "test orient", "include": ["functions_graph", "map"], "max_tokens": 50},
         tmp_path,
     )
     # map should be present (higher priority), functions_graph skipped
@@ -486,7 +490,7 @@ def test_orient_compacts_rules_when_over_budget(graph, tmp_path):
     # rules_list full form would overflow, compact (titles-only) fits.
     result = _tool_orient(
         graph,
-        {"include": ["map", "rules_list"], "max_tokens": 250},
+        {"task": "test orient", "include": ["map", "rules_list"], "max_tokens": 250},
         tmp_path,
     )
     # rules_list survives but as compact-only.
@@ -872,7 +876,7 @@ def test_orient_rules_list_survives_budget_starvation(graph, tmp_path):
     # but the compact-rules reserve should guarantee it survives.
     result = _tool_orient(
         graph,
-        {"include": ["map", "conventions", "rules_list"], "max_tokens": 700},
+        {"task": "test orient", "include": ["map", "conventions", "rules_list"], "max_tokens": 700},
         tmp_path,
     )
     assert "rules_list" in result
@@ -1022,26 +1026,138 @@ class TestOrientIncludeCoercion:
     def test_accepts_json_encoded_array_string(self, graph, tmp_path):
         """Sonnet sometimes sends include as '[\"map\",\"rules_list\"]'."""
         result = _tool_orient(
-            graph, {"include": '["map", "hotspots"]'}, tmp_path,
+            graph, {"task": "test orient", "include": '["map", "hotspots"]'}, tmp_path,
         )
         assert "map" in result
 
     def test_accepts_single_string_as_one_element_array(self, graph, tmp_path):
         """Haiku sometimes sends a bare string when the spec wants an array."""
-        result = _tool_orient(graph, {"include": "map"}, tmp_path)
+        result = _tool_orient(graph, {"task": "test orient", "include": "map"}, tmp_path)
         assert "map" in result
 
     def test_malformed_json_string_treated_as_section_name(self, graph, tmp_path):
         """'[map' isn't valid JSON — fall back to treating it as a name
         (which won't match any section, returning no data rather than crashing)."""
-        result = _tool_orient(graph, {"include": "[map"}, tmp_path)
+        result = _tool_orient(graph, {"task": "test orient", "include": "[map"}, tmp_path)
         # Doesn't match any real section; response is either empty-ish or has
         # just the meta fields (no map/hotspots/etc.).
         assert isinstance(result, dict)
         assert "map" not in result
 
     def test_empty_string_empty_list(self, graph, tmp_path):
-        result = _tool_orient(graph, {"include": ""}, tmp_path)
+        result = _tool_orient(graph, {"task": "test orient", "include": ""}, tmp_path)
         assert "map" not in result
-        result2 = _tool_orient(graph, {"include": []}, tmp_path)
+        result2 = _tool_orient(graph, {"task": "test orient", "include": []}, tmp_path)
         assert "map" not in result2
+
+
+# ---------------------------------------------------------------------------
+# orient(task) — Wave 2 mandatory task + soft validation + semantic_matches
+# ---------------------------------------------------------------------------
+
+class TestOrientTask:
+    def test_missing_task_returns_error(self, graph, tmp_path):
+        """task is mandatory — schema enforces, but the impl also short-circuits."""
+        result = _tool_orient(graph, {"include": ["map"]}, tmp_path)
+        assert "error" in result
+        assert "task required" in result["error"]
+
+    def test_blank_task_returns_error(self, graph, tmp_path):
+        result = _tool_orient(
+            graph, {"task": "   ", "include": ["map"]}, tmp_path,
+        )
+        assert "error" in result
+
+    def test_valid_task_includes_semantic_matches_field(self, graph, tmp_path):
+        """semantic_matches is always populated (or surfaces a hint when index missing)."""
+        result = _tool_orient(
+            graph,
+            {"task": "audit soft-delete consistency", "include": ["map"]},
+            tmp_path,
+        )
+        # Without --with-units the index is absent, so a hint surfaces;
+        # in either branch the field exists.
+        assert "semantic_matches" in result
+        assert isinstance(result["semantic_matches"], list)
+
+    def test_short_task_warning(self, graph, tmp_path):
+        """Two-word task triggers the 'too short' soft warning."""
+        result = _tool_orient(
+            graph, {"task": "fix bug", "include": ["map"]}, tmp_path,
+        )
+        warnings = result.get("task_warnings", [])
+        assert any("very short" in w for w in warnings)
+
+    def test_multi_task_warning(self, graph, tmp_path):
+        """`X and Y` with two verbs triggers the multi-task soft warning."""
+        result = _tool_orient(
+            graph,
+            {
+                "task": "fix Client.invoices and add new payment endpoint",
+                "include": ["map"],
+            },
+            tmp_path,
+        )
+        warnings = result.get("task_warnings", [])
+        assert any("multi-task" in w for w in warnings)
+
+    def test_well_formed_task_no_warnings(self, graph, tmp_path):
+        result = _tool_orient(
+            graph,
+            {
+                "task": "simplify invoice statuses from 6 to 3",
+                "include": ["map"],
+            },
+            tmp_path,
+        )
+        # No task_warnings key OR an empty list — both acceptable
+        warnings = result.get("task_warnings", [])
+        # Note: 'no semantic_matches above 0.5' may still warn if index missing.
+        # The check we care about: short/multi-task warnings absent.
+        assert not any("very short" in w for w in warnings)
+        assert not any("multi-task" in w for w in warnings)
+
+
+from winkers.mcp.tools import _validate_task  # noqa: E402
+
+
+class TestValidateTask:
+    def test_short_task(self):
+        warnings = _validate_task("fix bug", matches=[])
+        assert any("very short" in w for w in warnings)
+
+    def test_multi_task_and(self):
+        warnings = _validate_task(
+            "fix bug and refactor logging",
+            matches=[{"score": 0.9}],
+        )
+        assert any("multi-task" in w for w in warnings)
+
+    def test_multi_task_ampersand(self):
+        warnings = _validate_task(
+            "extract date utils & rename calculate_price",
+            matches=[{"score": 0.9}],
+        )
+        assert any("multi-task" in w for w in warnings)
+
+    def test_low_score_warning(self):
+        warnings = _validate_task(
+            "simplify invoice statuses from 6 to 3",
+            matches=[{"score": 0.2}, {"score": 0.1}],
+        )
+        assert any("didn't match any indexed area" in w for w in warnings)
+
+    def test_well_formed_no_warnings(self):
+        warnings = _validate_task(
+            "simplify invoice statuses from 6 to 3",
+            matches=[{"score": 0.9}],
+        )
+        assert warnings == []
+
+    def test_single_verb_with_and_does_not_trigger(self):
+        """`X and Y nouns` — only one verb — should NOT trigger multi-task."""
+        warnings = _validate_task(
+            "fix Client and Invoice models",
+            matches=[{"score": 0.9}],
+        )
+        assert not any("multi-task" in w for w in warnings)

@@ -65,12 +65,53 @@ class UnitsStore:
         """Write units list atomically.
 
         Stable ordering: id-sorted so diffs across init runs stay readable.
+        Preserves any extra top-level keys (`impact_meta`, future
+        sections) that other callers may have stored in the same file.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_units = sorted(units, key=lambda u: u.get("id", ""))
+
+        existing_top = self._load_top_level()
+        existing_top["units"] = sorted_units
+
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(
-            json.dumps({"units": sorted_units}, ensure_ascii=False, indent=2),
+            json.dumps(existing_top, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(self.path)
+
+    # ------------------------------------------------------------------
+    # Top-level helpers (Wave 4d — impact_meta lives next to `units`)
+    # ------------------------------------------------------------------
+
+    def _load_top_level(self) -> dict:
+        """Read the raw top-level dict from units.json — empty on miss/parse-fail."""
+        if not self.path.exists():
+            return {}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return data
+
+    def load_impact_meta(self) -> dict:
+        """Return the persisted impact_meta dict (or {} if absent)."""
+        meta = self._load_top_level().get("impact_meta", {})
+        return meta if isinstance(meta, dict) else {}
+
+    def save_impact_meta(self, meta: dict) -> None:
+        """Update only the `impact_meta` section, preserving units."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        existing_top = self._load_top_level()
+        existing_top["impact_meta"] = meta
+        if "units" not in existing_top:
+            existing_top["units"] = []
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(existing_top, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         tmp.replace(self.path)
@@ -204,6 +245,9 @@ class UnitsStore:
         live_function_ids: set[str],
         live_template_ids: set[str],
         live_data_ids: set[str] | None = None,
+        live_value_ids: set[str] | None = None,
+        live_class_ids: set[str] | None = None,
+        live_attr_ids: set[str] | None = None,
     ) -> list[dict]:
         """Drop units whose anchor target no longer exists.
 
@@ -213,6 +257,13 @@ class UnitsStore:
           (`live_data_ids=None` means "don't prune data units" — used
           when the caller hasn't scanned data files; preserves backward
           compatibility for tests not covering data file flow.)
+        - value_unit (`value:` prefix): keep iff in `live_value_ids`.
+          `None` means "don't prune" — used when callers haven't run
+          the value_locked detector.
+        - class_unit (`class:` prefix): keep iff in `live_class_ids`.
+          `None` means "don't prune".
+        - attribute_unit (`attr:` prefix): keep iff in `live_attr_ids`.
+          `None` means "don't prune".
         - everything else (manual traceability, auto-detected couplings):
           kept untouched — couplings are regenerated wholesale by the aggregator.
         """
@@ -235,6 +286,24 @@ class UnitsStore:
                 continue
             if uid.startswith("data:"):
                 if live_data_ids is None or uid in live_data_ids:
+                    kept.append(u)
+                else:
+                    dropped += 1
+                continue
+            if uid.startswith("value:"):
+                if live_value_ids is None or uid in live_value_ids:
+                    kept.append(u)
+                else:
+                    dropped += 1
+                continue
+            if uid.startswith("class:"):
+                if live_class_ids is None or uid in live_class_ids:
+                    kept.append(u)
+                else:
+                    dropped += 1
+                continue
+            if uid.startswith("attr:"):
+                if live_attr_ids is None or uid in live_attr_ids:
                     kept.append(u)
                 else:
                     dropped += 1

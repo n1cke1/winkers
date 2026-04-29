@@ -1,4 +1,16 @@
-"""Stop hook — session audit gate. Forces continuation on first FAIL."""
+"""Stop hook — session audit recorder.
+
+Wave 6 redesign: this hook **never** forces continuation. It runs the
+3-tier audit (PASS / WARN / FAIL) once, persists `audit.json` into
+the per-session directory, and writes a pending-audit markdown for
+the next session's `prompt_enrich` to surface. Stop is always clean.
+
+The agent can call ``session_done()`` itself before Stop to inspect
+the audit early and fix issues — that path returns the same verdict
+without writing files (the writes happen in this hook). FAIL or WARN
+status is informational; the redesign explicitly drops "loop until
+PASS" semantics (CONCEPT.md §5).
+"""
 
 from __future__ import annotations
 
@@ -6,98 +18,80 @@ import json
 import sys
 from pathlib import Path
 
+from winkers.hooks._logger import log_hook
+from winkers.session.audit import write_audit, write_pending_audit
+
 
 def run(root: Path) -> None:
-    """Read hook JSON from stdin, run session_done audit, output continue/stop."""
+    """Read hook JSON from stdin, run session_done audit, persist + exit."""
     try:
-        json.loads(sys.stdin.read())
+        hook_data = json.loads(sys.stdin.read())
     except Exception:
         sys.exit(0)
 
-    from winkers.session.state import SessionStore
+    session_id = str(hook_data.get("session_id", ""))
 
-    session_store = SessionStore(root)
-    session = session_store.load()
+    with log_hook(root, session_id, "Stop", "session_audit") as rec:
+        from winkers.session.state import SessionStore
 
-    # No session — nothing to audit
-    if session is None or not session.writes:
-        sys.exit(0)
+        session_store = SessionStore(root)
+        session = session_store.load()
 
-    from winkers.store import GraphStore
+        # No session → nothing to audit. Still log so we can see Stop fire.
+        if session is None or not session.writes:
+            rec["outcome"] = "no_writes"
+            sys.exit(0)
 
-    store = GraphStore(root)
-    graph = store.load()
-    if graph is None:
-        sys.exit(0)
+        rec["writes"] = len(session.writes)
 
-    # Import the audit logic from MCP tools
-    from winkers.mcp.tools import _tool_session_done
+        from winkers.store import GraphStore
 
-    result = _tool_session_done(graph, root)
-    status = result.get("status", "PASS")
+        store = GraphStore(root)
+        graph = store.load()
+        if graph is None:
+            rec["outcome"] = "no_graph"
+            sys.exit(0)
 
-    if status == "FAIL":
-        # First FAIL → continue, give the agent a chance to fix
-        issues_text = _format_issues(result.get("issues", []))
+        from winkers.mcp.tools import _tool_session_done
+
+        audit = _tool_session_done(graph, root)
+        status = audit.get("status", "PASS")
+        rec["status"] = status
+
+        # Persist to per-session dir + project-root pending file.
+        audit_path = write_audit(root, session_id, audit)
+        if audit_path is not None:
+            rec["audit_path"] = str(
+                audit_path.relative_to(root) if audit_path.is_relative_to(root)
+                else audit_path
+            )
+        write_pending_audit(root, audit)
+
+        # Surface a short additionalContext for the user/transcript.
+        # No `continue: True` — Stop hook always allows the session to
+        # end. Wave 6 dropped force-continuation: FAIL is informational,
+        # not a forcing function.
+        lines = [f"[Winkers] Session audit: {status}."]
+        if status != "PASS":
+            issues = audit.get("issues", [])[:3]
+            for it in issues:
+                kind = it.get("kind", "issue")
+                detail = it.get("detail", "")
+                lines.append(f"  ✗ {kind}: {detail}")
+            warnings_list = audit.get("warnings", [])[:3]
+            for w in warnings_list:
+                kind = w.get("kind", "warn")
+                detail = w.get("detail", "")
+                lines.append(f"  ⚠ {kind}: {detail}")
+            lines.append(
+                "  (next session's prompt enrichment will surface this)"
+            )
+
         output = {
-            "continue": True,
             "hookSpecificOutput": {
                 "hookEventName": "Stop",
-                "additionalContext": (
-                    "[Winkers] SESSION AUDIT FAILED — fix before finishing:\n"
-                    + issues_text
-                    + "\nFix the issues above, then your task will be complete."
-                ),
+                "additionalContext": "\n".join(lines),
             },
         }
         print(json.dumps(output))
         sys.exit(0)
-
-    # PASS (or second+ call via anti-loop) → allow stop
-    lines = ["[Winkers] Session audit PASSED."]
-    recommendations = result.get("recommendations", [])
-    if recommendations:
-        lines.append("Recommendations for future improvement:")
-        for rec in recommendations[:3]:
-            lines.append(f"  - {rec.get('detail', '')}")
-
-    remaining = result.get("remaining_warnings", [])
-    if remaining:
-        lines.append("Remaining warnings (logged for improve loop):")
-        for w in remaining[:3]:
-            lines.append(f"  - {w}")
-
-    output = {
-        "continue": False,
-        "hookSpecificOutput": {
-            "hookEventName": "Stop",
-            "additionalContext": "\n".join(lines),
-        },
-    }
-    print(json.dumps(output))
-    sys.exit(0)
-
-
-def _format_issues(issues: list[dict]) -> str:
-    """Format audit issues as readable text."""
-    lines: list[str] = []
-    for issue in issues:
-        kind = issue.get("kind", "")
-        detail = issue.get("detail", "")
-        if kind == "broken_caller":
-            lines.append(f"  ✗ BROKEN CALLERS: {detail}")
-            for site in issue.get("call_sites", [])[:5]:
-                f = site.get("file", "")
-                ln = site.get("line", "")
-                fn = site.get("fn", "")
-                lines.append(f"    → {f}:{ln} ({fn})")
-        elif kind == "coherence_sync":
-            lines.append(f"  ✗ COHERENCE: {detail}")
-            unmod = issue.get("unmodified_files", [])
-            if unmod:
-                lines.append(f"    Files not updated: {', '.join(unmod)}")
-        elif kind == "debt_regression":
-            lines.append(f"  ✗ DEBT: {detail}")
-        else:
-            lines.append(f"  ✗ {kind}: {detail}")
-    return "\n".join(lines)

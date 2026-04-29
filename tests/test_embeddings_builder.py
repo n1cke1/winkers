@@ -111,6 +111,36 @@ def test_unit_without_id_skipped():
     assert idx.ids == ["u1"]
 
 
+def test_embed_text_includes_summary_for_value_unit():
+    """Wave 4b — value_unit has empty `description` but non-empty `summary`.
+    The embed text should include the summary so BGE-M3 can match queries
+    against the collection's value names."""
+    unit = {
+        "id": "value:status.py::VALID_STATUSES",
+        "kind": "value_unit",
+        "name": "VALID_STATUSES",
+        "summary": "VALID_STATUSES: set of 3 value(s) ['draft', 'sent', 'paid']",
+        "description": "",
+    }
+    text = b._embed_text_for(unit)
+    assert "VALID_STATUSES" in text
+    assert "'draft'" in text
+    assert "'sent'" in text
+
+
+def test_embed_text_uses_description_when_present():
+    """Function units carry a real description — summary is optional."""
+    unit = {
+        "id": "fn1",
+        "kind": "function_unit",
+        "name": "calculate_price",
+        "description": "Computes the total price of invoice line items.",
+    }
+    text = b._embed_text_for(unit)
+    assert "calculate_price" in text
+    assert "Computes the total" in text
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------

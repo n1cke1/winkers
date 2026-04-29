@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -120,26 +119,31 @@ class RulesFile(BaseModel):
 # ---------------------------------------------------------------------------
 
 class RulesStore:
+    """Thin shim over `ProjectStore` for backwards-compat.
+
+    Wave 4a moved persistence to `.winkers/project.json::rules`.
+    Existing add/delete/load/save semantics are preserved by
+    delegating to `ProjectStore`. Triggers one-shot migration of
+    legacy `rules/rules.json` on first read.
+
+    `rules_path` and `overview_path` remain as attributes — some
+    callers (and tests) assert on these paths. `overview.md` is still
+    written there independently; only `rules.json` moved.
+    """
+
     def __init__(self, root: Path) -> None:
         self.root = root
         self.rules_dir = root / STORE_DIR / RULES_DIR
-        self.rules_path = self.rules_dir / RULES_FILE
+        self.rules_path = self.rules_dir / RULES_FILE  # legacy ref
         self.overview_path = self.rules_dir / OVERVIEW_FILE
 
     def load(self) -> RulesFile:
-        if not self.rules_path.exists():
-            return RulesFile()
-        try:
-            data = json.loads(self.rules_path.read_text(encoding="utf-8"))
-            return RulesFile.model_validate(data)
-        except Exception:
-            return RulesFile()
+        from winkers.project import ProjectStore
+        return ProjectStore(self.root).load_or_default().rules
 
     def save(self, rules_file: RulesFile) -> None:
-        self.rules_dir.mkdir(parents=True, exist_ok=True)
-        self.rules_path.write_text(
-            rules_file.model_dump_json(indent=2), encoding="utf-8"
-        )
+        from winkers.project import ProjectStore
+        ProjectStore(self.root).update_rules(rules_file)
 
     def next_id(self, rules_file: RulesFile) -> int:
         """Return next available integer ID (never reuses deleted IDs)."""
@@ -163,7 +167,12 @@ class RulesStore:
         return False
 
     def exists(self) -> bool:
-        return self.rules_path.exists()
+        """True if either the new `project.json` or legacy `rules.json` is on disk."""
+        from winkers.project import PROJECT_FILE
+        return (
+            (self.root / STORE_DIR / PROJECT_FILE).exists()
+            or self.rules_path.exists()
+        )
 
 
 # ---------------------------------------------------------------------------

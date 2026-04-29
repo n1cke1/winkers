@@ -155,25 +155,41 @@ class EnrichResult:
 # ---------------------------------------------------------------------------
 
 class SemanticStore:
+    """Thin shim over `ProjectStore` for backwards-compat.
+
+    Wave 4a moved persistence to `.winkers/project.json`. Callers that
+    used to read/write `semantic.json` directly continue to work — this
+    class transparently delegates to `ProjectStore` and triggers
+    one-shot migration of legacy `semantic.json` + `rules/rules.json`
+    on first read.
+
+    `semantic_path` is preserved as an attribute (some tests assert on
+    it) but is no longer used for I/O.
+    """
+
     def __init__(self, root: Path) -> None:
         self.root = root
         self.store_dir = root / STORE_DIR
-        self.semantic_path = self.store_dir / SEMANTIC_FILE
+        self.semantic_path = self.store_dir / SEMANTIC_FILE  # legacy ref
 
     def save(self, data: SemanticLayer) -> None:
-        self.store_dir.mkdir(parents=True, exist_ok=True)
-        self.semantic_path.write_text(
-            data.model_dump_json(indent=2), encoding="utf-8"
-        )
+        from winkers.project import ProjectStore
+        ProjectStore(self.root).update_semantic(data)
 
     def load(self) -> SemanticLayer | None:
-        if not self.semantic_path.exists():
+        from winkers.project import ProjectStore
+        bundle = ProjectStore(self.root).load_or_default()
+        # Distinguish "no project state at all" (empty migration) from
+        # "project state exists but semantic section is at defaults".
+        # Prior callers expect None when the project hasn't been
+        # enriched yet — preserve that contract by checking whether the
+        # underlying file exists OR a legacy semantic.json exists.
+        if (
+            not (self.store_dir / "project.json").exists()
+            and not self.semantic_path.exists()
+        ):
             return None
-        try:
-            raw = json.loads(self.semantic_path.read_text(encoding="utf-8"))
-            return SemanticLayer.model_validate(raw)
-        except Exception:
-            return None
+        return bundle.semantic
 
 
 # ---------------------------------------------------------------------------

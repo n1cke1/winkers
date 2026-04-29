@@ -205,13 +205,14 @@ class TestSessionAuditHook:
             run(tmp_path)
         assert exc_info.value.code == 0
 
-    def test_clean_session_allows_stop(self, graph, tmp_path):
-        """Session with no warnings → PASS, continue=false."""
+    def test_clean_session_emits_pass_status(self, graph, tmp_path):
+        """Wave 6 — clean session → PASS in additionalContext, no force-continue."""
         (tmp_path / ".winkers").mkdir()
         GraphStore(tmp_path).save(graph)
 
         session = SessionState(started_at="2026-01-01T00:00:00Z")
         session.add_write(WriteEvent(timestamp="t1", file_path="a.py"))
+        session.before_create_calls = 1  # avoid the no_intent WARN
         SessionStore(tmp_path).save(session)
 
         hook_input = json.dumps({
@@ -230,11 +231,15 @@ class TestSessionAuditHook:
 
         assert captured_output
         result = json.loads(captured_output[0])
-        assert result["continue"] is False
-        assert "PASSED" in result["hookSpecificOutput"]["additionalContext"]
+        # No `continue` key — Wave 6 dropped force-continuation entirely.
+        assert "continue" not in result
+        assert (
+            "PASS"
+            in result["hookSpecificOutput"]["additionalContext"]
+        )
 
-    def test_fail_forces_continue(self, graph, tmp_path):
-        """Session with broken callers → FAIL, continue=true."""
+    def test_fail_does_not_force_continue(self, graph, tmp_path):
+        """Wave 6 — broken callers produce FAIL but Stop still exits cleanly."""
         (tmp_path / ".winkers").mkdir()
         GraphStore(tmp_path).save(graph)
 
@@ -263,11 +268,21 @@ class TestSessionAuditHook:
 
         assert captured_output
         result = json.loads(captured_output[0])
-        assert result["continue"] is True
-        assert "FAILED" in result["hookSpecificOutput"]["additionalContext"]
+        # No force-continue: FAIL is informational.
+        assert "continue" not in result
+        assert "FAIL" in result["hookSpecificOutput"]["additionalContext"]
+        # audit.json + pending_audit.md were persisted for next session.
+        from winkers.session.audit import (
+            AUDIT_FILENAME,
+            PENDING_AUDIT_FILENAME,
+        )
+        from winkers.session.session_dir import get_session_dir
+        sess_dir = get_session_dir(tmp_path, "test")
+        assert (sess_dir / AUDIT_FILENAME).exists()
+        assert (tmp_path / PENDING_AUDIT_FILENAME).exists()
 
-    def test_second_call_allows_stop(self, graph, tmp_path):
-        """Second stop call → PASS (anti-loop), continue=false."""
+    def test_repeat_stop_returns_same_verdict(self, graph, tmp_path):
+        """Wave 6 — second Stop returns the same verdict (anti-loop dropped)."""
         (tmp_path / ".winkers").mkdir()
         GraphStore(tmp_path).save(graph)
 
@@ -298,7 +313,9 @@ class TestSessionAuditHook:
 
         assert captured_output
         result = json.loads(captured_output[0])
-        assert result["continue"] is False
+        # No `continue` either way — second call still surfaces FAIL,
+        # but the hook never blocks Stop.
+        assert "continue" not in result
 
 
 # ---------------------------------------------------------------------------

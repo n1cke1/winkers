@@ -64,6 +64,40 @@ class ImportEdge(BaseModel):
     names: list[str]
 
 
+class ClassDefinition(BaseModel):
+    """A class declaration recognised at indexing time.
+
+    Wave 5a — feeds the ``class_unit`` records that show up alongside
+    function/attribute units in `units.json`. Methods are NOT enumerated
+    here — they remain individual ``FunctionNode`` entries with
+    ``class_name`` set, and the class unit only carries class-level
+    structural info.
+    """
+    name: str                       # "Client"
+    file: str                       # "app/repos/client.py"
+    line_start: int
+    line_end: int
+    base_classes: list[str] = []    # ["Base", "TimestampMixin"]
+
+
+class ClassAttribute(BaseModel):
+    """A class-body attribute whose value is a call expression.
+
+    Captures the ORM-relationship / Pydantic-Field / dataclass-field
+    pattern: a class-level annotated or plain assignment whose RHS is
+    a constructor call. Wave 5a populates this list so an agent intent
+    of `fix Client.invoices cascade` can resolve to a real graph node
+    instead of fuzzy-matching against function names.
+    """
+    name: str                       # "Client.invoices"
+    class_name: str                 # "Client"
+    attr_name: str                  # "invoices"
+    file: str                       # "app/repos/client.py"
+    line: int
+    ctor: str                       # "relationship", "Field", "Mapped", "mapped_column", "field"
+    annotation: str = ""            # "Mapped[List[Invoice]]" or "" when not annotated
+
+
 class ValueLockedCollection(BaseModel):
     """A module-level collection of literal values whose membership is read by
     code paths and tested with literal arguments at call sites.
@@ -88,6 +122,9 @@ class Graph(BaseModel):
     call_edges: list[CallEdge] = []
     import_edges: list[ImportEdge] = []
     value_locked_collections: list[ValueLockedCollection] = []
+    # Wave 5a — class + class-body attribute records used by units.json.
+    class_definitions: list[ClassDefinition] = []
+    class_attributes: list[ClassAttribute] = []
     # class_name -> defining file path. Populated for Python for now.
     class_files: dict[str, str] = {}
     # class_name -> {attr_name: target_class_name} from `self.X = ClassName(...)`

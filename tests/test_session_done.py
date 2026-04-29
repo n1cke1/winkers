@@ -38,6 +38,9 @@ class TestSessionDonePass:
         state.add_write(WriteEvent(
             timestamp="t1", file_path="modules/pricing.py",
         ))
+        # Wave 6: register an intent so the WARN tier doesn't fire on
+        # "writes without before_create" — that's a separate test below.
+        state.before_create_calls = 1
         store.save(state)
 
         result = _tool_session_done(graph, tmp_path)
@@ -164,6 +167,7 @@ class TestSessionDoneFail:
             detail='Rule #42 "README synced with pipeline": check README.md',
             fix_approach="sync",
         ))
+        state.before_create_calls = 1  # Wave 6: avoid no_intent WARN
         store.save(state)
 
         result = _tool_session_done(graph, tmp_path)
@@ -214,9 +218,13 @@ class TestSessionDoneFail:
 # ---------------------------------------------------------------------------
 
 
-class TestSessionDoneAntiLoop:
-    def test_second_call_always_pass(self, graph, tmp_path):
-        """Second call → PASS even if issues remain (anti-loop)."""
+class TestSessionDoneRepeatCalls:
+    """Wave 6 — the prior 'always PASS on second call' anti-loop is gone.
+    Stop hook never forces continuation, so repeating session_done() is
+    harmless and returns the current verdict as-is. The agent that calls
+    repeatedly just gets the same FAIL again."""
+
+    def test_second_call_returns_same_verdict(self, graph, tmp_path):
         (tmp_path / ".winkers").mkdir()
         store = SessionStore(tmp_path)
         state = SessionState(started_at="2026-01-01T00:00:00Z")
@@ -227,17 +235,12 @@ class TestSessionDoneAntiLoop:
         ))
         store.save(state)
 
-        # First call → FAIL
         result1 = _tool_session_done(graph, tmp_path)
         assert result1["status"] == "FAIL"
-
-        # Second call → PASS (anti-loop)
         result2 = _tool_session_done(graph, tmp_path)
-        assert result2["status"] == "PASS"
-        assert "remaining_warnings" in result2
+        assert result2["status"] == "FAIL"
 
-    def test_third_call_still_pass(self, graph, tmp_path):
-        """Third+ calls also PASS."""
+    def test_third_call_returns_same_verdict(self, graph, tmp_path):
         (tmp_path / ".winkers").mkdir()
         store = SessionStore(tmp_path)
         state = SessionState(started_at="2026-01-01T00:00:00Z")
@@ -247,10 +250,10 @@ class TestSessionDoneAntiLoop:
         ))
         store.save(state)
 
-        _tool_session_done(graph, tmp_path)  # 1st → FAIL
-        _tool_session_done(graph, tmp_path)  # 2nd → PASS
-        result3 = _tool_session_done(graph, tmp_path)  # 3rd → PASS
-        assert result3["status"] == "PASS"
+        _tool_session_done(graph, tmp_path)
+        _tool_session_done(graph, tmp_path)
+        result3 = _tool_session_done(graph, tmp_path)
+        assert result3["status"] == "FAIL"
 
     def test_session_done_calls_counter(self, graph, tmp_path):
         """session_done_calls increments correctly."""
@@ -285,7 +288,7 @@ class TestOrientSessionStatus:
         ))
         store.save(state)
 
-        result = _tool_orient(graph, {"include": ["map"]}, tmp_path)
+        result = _tool_orient(graph, {"task": "test orient", "include": ["map"]}, tmp_path)
         assert "session" in result
         assert result["session"]["writes"] == 1
         assert result["session"]["warnings"] == 1
@@ -293,7 +296,7 @@ class TestOrientSessionStatus:
 
     def test_orient_no_session_when_inactive(self, graph, tmp_path):
         """orient() omits session key when no session.json."""
-        result = _tool_orient(graph, {"include": ["map"]}, tmp_path)
+        result = _tool_orient(graph, {"task": "test orient", "include": ["map"]}, tmp_path)
         assert "session" not in result
 
     def test_session_status_helper(self, tmp_path):
