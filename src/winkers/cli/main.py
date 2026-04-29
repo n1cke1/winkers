@@ -533,6 +533,20 @@ def init(path: str, no_semantic: bool, yes: bool, force: bool,
     from winkers.class_attrs import detect_class_attrs
     detect_class_attrs(graph, root)
 
+    # Path 2 of the literal-blind fix: AST expression-uses index. Built
+    # against the value_locked tracked set produced just above. Cheap
+    # — one AST pass per .py file. impact_check / diff_collections
+    # consults this index when present (Wave 3 grep stays as fallback
+    # for non-Python files).
+    from winkers.expressions import ExpressionsStore, build_expressions_index
+    expr_index = build_expressions_index(graph, root)
+    if expr_index.values:
+        ExpressionsStore(root).save(expr_index)
+        click.echo(
+            f"  Expression-uses index: {len(expr_index.values)} value(s) "
+            f"with ≥3 occurrences."
+        )
+
     _collect_git_history(root, graph)
 
     store = GraphStore(root)

@@ -474,7 +474,31 @@ def diff_collections(
         # syntactic predicate).
         string_values = sorted(v for v in all_removed if isinstance(v, str))
         if string_values:
-            repo_hits = count_string_literal_occurrences(string_values, root)
+            # Path 2: if the AST expression-uses index is available,
+            # use it — it's structurally aware (knows comparison vs
+            # call_arg vs subscript), already cached on disk, and skips
+            # comments/docstring noise. Fall back to the regex grep
+            # (Path 1) when the index is absent or doesn't cover all
+            # values (mixed-language repos).
+            from winkers.expressions import ExpressionsStore
+            ast_index = ExpressionsStore(root).load()
+            covered: set[str] = set()
+            if ast_index is not None and ast_index.values:
+                for v in string_values:
+                    items = ast_index.values.get(v) or []
+                    if items:
+                        repo_hits[v] = [
+                            (it.file, it.line, it.context) for it in items
+                        ]
+                        covered.add(v)
+            # Anything the index didn't cover (non-Python source like
+            # SQL/JSON/templates) goes through the grep fallback.
+            uncovered = [v for v in string_values if v not in covered]
+            if uncovered:
+                grep_hits = count_string_literal_occurrences(uncovered, root)
+                for v, items in grep_hits.items():
+                    if items:
+                        repo_hits[v] = items
 
     changes: list[dict] = []
     for key, after_col in after_map.items():
