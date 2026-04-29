@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.9.0 — surface cleanup
+
+### Breaking — MCP tools
+
+- `find_work_area` is no longer registered as a public MCP tool. Its
+  semantic-search functionality moved into `orient(task=…)` — `orient`
+  always returns `semantic_matches` against the task it was given, so
+  the prior orient + find_work_area two-step is now one call. The
+  implementation still exists internally; `_FIND_WORK_AREA_TOOL_NAME`
+  remains the dedup key in `SeenUnitsRegistry`. Agents calling
+  `find_work_area` directly will get `Unknown tool` — switch to
+  `orient(task="…")`.
+
+### Breaking — CLI commands removed
+
+The CLI surface was stripped of commands that duplicated MCP tools or
+existed only as one-shot migration helpers:
+
+- `winkers search` → use `orient(task=…)` (also upgrades from the old
+  FTS5-only path to BGE-M3 embeddings)
+- `winkers impact` → use MCP `scope(function=…)` (returns the same
+  `impact` block)
+- `winkers dupes` → use MCP `before_create(intent=…)` → `similar_logic`
+- `winkers couplings` → no caller; `units.json` is reachable directly
+  if needed
+- `winkers conventions-migrate` → one-shot Wave 4 migration; everyone
+  who needed it has migrated
+- `winkers cleanup-legacy` → ditto, one-shot artifact sweep
+
+The `hook session-audit` subcommand (muted since 0.8.1) is gone too.
+The `_install_interactive_hooks` cleanup sweep that strips
+`session-audit` hooks from old `settings.json` files **stays**, so
+upgrading installs scrub themselves.
+
+### Breaking — CLI commands renamed
+
+Single-unit re-author commands and the intent provider eval tool are
+not part of the day-to-day workflow; they're useful for prompt iteration
+and provider tuning, so they moved under a `debug` group:
+
+| Before                       | After                              |
+|------------------------------|------------------------------------|
+| `winkers describe-fn`        | `winkers debug describe-fn`        |
+| `winkers describe-section`   | `winkers debug describe-section`   |
+| `winkers describe-data`      | `winkers debug describe-data`      |
+| `winkers intent eval`        | `winkers debug intent-eval`        |
+
+Top-level CLI is now 14 commands + 2 groups (`hook` 6 sub, `debug` 4 sub).
+
+### Refactor — internal layout
+
+Two monster files split into per-concern packages. No behavioural
+change; tests + lint clean. Public surface preserved through
+re-exports — dashboard handlers, hooks, and tests need no changes.
+
+```
+src/winkers/mcp/
+  tools.py (2438 LoC monolith)        →  tools/  (8 modules + _common.py)
+                                          tools/__init__.py is 149 LoC
+                                          (orchestrator + dispatch table)
+src/winkers/cli/
+  main.py  (4196 LoC monolith)        →  main.py     (~110 LoC orchestrator)
+                                          commands/  (one module per command)
+                                          init_pipeline/  (5 modules)
+                                          hook_group.py + debug_group.py
+```
+
+Largest module after the split is `mcp/tools/orient.py` at 510 LoC
+(was a 4196-line file). Adding a new MCP tool is one new module + one
+entry in `_TOOL_MODULES`; adding a new CLI command is one module +
+one `cli.add_command(...)` line in `commands/__init__.py`.
+
+### Embeddings — small ergonomics
+
+- `find_work_area` private helper no longer trips on absent
+  `INDEX_FILENAME` — caller (`orient`) surfaces `semantic_hint` instead
+  of failing the whole call when the per-unit index hasn't been built.
+- Background preload + `wait_for_preload(timeout=15.0)` unchanged from
+  0.8.4.
+
+### Documentation
+
+- Updated `claude_md_snippet.md` to the new workflow (orient(task=…)
+  step 1, no find_work_area step). Existing CLAUDE.md files refresh on
+  the next `winkers init` via `_install_claude_md_snippet`.
+- README MCP-tools table reflects the 8 registered tools and adds
+  `session_done`. CLI block drops `conventions-migrate` and adds
+  `debug describe-fn` / `debug intent-eval`.
+
 ## 0.8.4
 
 ### Embeddings: ONNX-INT8 BGE-M3 replaces sentence-transformers float32
