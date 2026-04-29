@@ -409,6 +409,22 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
     for au in attribute_units:
         units = store.upsert(units, au)
 
+    # ── 4e. LLM-author class / attribute / value descriptions (Wave 4c-2)
+    # Structural unit dicts have description="". Subscription-path
+    # `claude --print` fills in 70-120w prose + hardcoded_artifacts so
+    # find_work_area can match domain-language queries against these
+    # kinds. Skipped silently when claude binary unavailable; never
+    # blocks init.
+    units, n_class, n_attr, n_val = _author_meta_unit_descriptions(
+        units, store, graph, value_units, class_units, attribute_units,
+        root=root, concurrency=concurrency,
+    )
+    if n_class or n_attr or n_val:
+        click.echo(
+            f"  Authored: {n_class} class / {n_attr} attribute / "
+            f"{n_val} value description(s)."
+        )
+
     # ── 5. Prune orphans ────────────────────────────────────────────────
     units = store.prune_orphans(
         units, live_fn_ids, live_template_ids, live_data_ids,
@@ -721,6 +737,268 @@ def _gc_runtime_sessions(root: Path) -> None:
     except Exception:
         # GC must never block init.
         pass
+
+
+def _author_meta_unit_descriptions(
+    units: list[dict],
+    store,
+    graph,
+    value_units: list[dict],
+    class_units: list[dict],
+    attribute_units: list[dict],
+    *,
+    root: Path,
+    concurrency: int,
+) -> tuple[list[dict], int, int, int]:
+    """Run the subscription-path author for class / attribute / value units.
+
+    Each kind gets its own author call sharing the same `claude --print`
+    transport. Failures are silently skipped (no API binary configured,
+    timeout, malformed response) — meta-unit descriptions are nice-to-
+    have, never gate init.
+
+    Returns updated `units` list and per-kind authored counts.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from winkers.descriptions.author import (
+        author_attribute_description,
+        author_class_description,
+        author_value_description,
+    )
+
+    # ── classes ────────────────────────────────────────────────────────
+    # Build context per stale class_unit. Method signatures pulled from
+    # graph.functions (already kept up to date). Attribute lines pulled
+    # from graph.class_attributes' `source_line` cache — but the
+    # scanner stores only line numbers, so reread the file. Cheap: each
+    # class is read once per init.
+    by_id = {u.get("id"): u for u in units if u.get("id")}
+    file_text_cache: dict[str, str] = {}
+
+    def _read_file_text(rel: str) -> str:
+        cached = file_text_cache.get(rel)
+        if cached is None:
+            try:
+                cached = (root / rel).read_text(
+                    encoding="utf-8", errors="replace",
+                )
+            except OSError:
+                cached = ""
+            file_text_cache[rel] = cached
+        return cached
+
+    class_contexts: list[dict] = []
+    for cu in class_units:
+        existing = by_id.get(cu["id"]) or cu
+        if existing.get("description"):
+            continue
+        anchor = cu.get("anchor") or {}
+        file_path = anchor.get("file", "")
+        line_start = anchor.get("line", 1)
+        # method signatures from graph.functions matching this class
+        method_sigs: list[str] = []
+        for fn in graph.functions.values():
+            if fn.file != file_path or fn.class_name != cu["name"]:
+                continue
+            params = ", ".join(
+                f"{p.name}: {p.type_hint}" if p.type_hint else p.name
+                for p in fn.params
+            )
+            method_sigs.append(f"def {fn.name}({params})")
+            if len(method_sigs) >= 12:
+                break
+        # attribute lines for this class
+        text = _read_file_text(file_path)
+        lines = text.splitlines() if text else []
+        attribute_lines: list[str] = []
+        for ca in graph.class_attributes:
+            if ca.file != file_path or ca.class_name != cu["name"]:
+                continue
+            if 0 < ca.line <= len(lines):
+                attribute_lines.append(lines[ca.line - 1])
+        # bracket the class to estimate line_end (anchor only stores
+        # line_start currently; reread the class slice for the prompt
+        # source ceiling). Walk graph.class_definitions for the match.
+        line_end = line_start
+        for cd in graph.class_definitions:
+            if cd.file == file_path and cd.name == cu["name"]:
+                line_end = cd.line_end
+                break
+        class_contexts.append({
+            "uid": cu["id"],
+            "name": cu["name"],
+            "file": file_path,
+            "line_start": line_start,
+            "line_end": line_end,
+            "base_classes": cu.get("base_classes", []),
+            "method_sigs": method_sigs,
+            "attribute_lines": attribute_lines,
+        })
+
+    n_class = 0
+    if class_contexts:
+        def _describe_cls(ctx):
+            return ctx, author_class_description(
+                class_name=ctx["name"],
+                file_path=ctx["file"],
+                line_start=ctx["line_start"],
+                line_end=ctx["line_end"],
+                base_classes=ctx["base_classes"],
+                method_signatures=ctx["method_sigs"],
+                attribute_lines=ctx["attribute_lines"],
+                cwd=root,
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+            futures = [ex.submit(_describe_cls, c) for c in class_contexts]
+            for fut in as_completed(futures):
+                ctx, desc = fut.result()
+                if desc is None:
+                    continue
+                target = by_id.get(ctx["uid"])
+                if target is None:
+                    continue
+                target["description"] = desc.description
+                if desc.hardcoded_artifacts:
+                    target["hardcoded_artifacts"] = [
+                        a.model_dump(exclude_none=True)
+                        for a in desc.hardcoded_artifacts
+                    ]
+                n_class += 1
+        store.save(units)
+
+    # ── attributes ─────────────────────────────────────────────────────
+    attr_contexts: list[dict] = []
+    for au in attribute_units:
+        existing = by_id.get(au["id"]) or au
+        if existing.get("description"):
+            continue
+        anchor = au.get("anchor") or {}
+        file_path = anchor.get("file", "")
+        line = anchor.get("line", 1)
+        text = _read_file_text(file_path)
+        lines = text.splitlines() if text else []
+        source_line = ""
+        if 0 < line <= len(lines):
+            source_line = lines[line - 1]
+        # Owning class summary if its description is already authored.
+        class_summary = ""
+        cls_uid = f"class:{file_path}::{au.get('class_name', '')}"
+        cls_unit = by_id.get(cls_uid)
+        if cls_unit:
+            class_summary = (
+                cls_unit.get("description")
+                or cls_unit.get("summary")
+                or ""
+            )[:200]
+        attr_contexts.append({
+            "uid": au["id"],
+            "name": au["name"],
+            "class_name": au.get("class_name", ""),
+            "file": file_path,
+            "line": line,
+            "ctor": au.get("ctor", ""),
+            "annotation": au.get("annotation", ""),
+            "source_line": source_line,
+            "class_summary": class_summary,
+        })
+
+    n_attr = 0
+    if attr_contexts:
+        def _describe_attr(ctx):
+            return ctx, author_attribute_description(
+                name=ctx["name"],
+                class_name=ctx["class_name"],
+                file_path=ctx["file"],
+                line=ctx["line"],
+                ctor=ctx["ctor"],
+                annotation=ctx["annotation"],
+                source_line=ctx["source_line"],
+                class_summary=ctx["class_summary"],
+                cwd=root,
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+            futures = [ex.submit(_describe_attr, c) for c in attr_contexts]
+            for fut in as_completed(futures):
+                ctx, desc = fut.result()
+                if desc is None:
+                    continue
+                target = by_id.get(ctx["uid"])
+                if target is None:
+                    continue
+                target["description"] = desc.description
+                if desc.hardcoded_artifacts:
+                    target["hardcoded_artifacts"] = [
+                        a.model_dump(exclude_none=True)
+                        for a in desc.hardcoded_artifacts
+                    ]
+                n_attr += 1
+        store.save(units)
+
+    # ── values ─────────────────────────────────────────────────────────
+    value_contexts: list[dict] = []
+    for vu in value_units:
+        existing = by_id.get(vu["id"]) or vu
+        if existing.get("description"):
+            continue
+        anchor = vu.get("anchor") or {}
+        value_contexts.append({
+            "uid": vu["id"],
+            "name": vu["name"],
+            "file": anchor.get("file", ""),
+            "line": anchor.get("line", 1),
+            "kind": _value_unit_kind_from_collection(graph, vu),
+            "values": vu.get("values", []),
+            "consumer_count": vu.get("consumer_count", 0),
+            "consumer_files": vu.get("consumer_files", []),
+        })
+
+    n_val = 0
+    if value_contexts:
+        def _describe_val(ctx):
+            return ctx, author_value_description(
+                name=ctx["name"],
+                file_path=ctx["file"],
+                line=ctx["line"],
+                kind=ctx["kind"],
+                values=ctx["values"],
+                consumer_count=ctx["consumer_count"],
+                consumer_files=ctx["consumer_files"],
+                cwd=root,
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+            futures = [ex.submit(_describe_val, c) for c in value_contexts]
+            for fut in as_completed(futures):
+                ctx, desc = fut.result()
+                if desc is None:
+                    continue
+                target = by_id.get(ctx["uid"])
+                if target is None:
+                    continue
+                target["description"] = desc.description
+                if desc.hardcoded_artifacts:
+                    target["hardcoded_artifacts"] = [
+                        a.model_dump(exclude_none=True)
+                        for a in desc.hardcoded_artifacts
+                    ]
+                n_val += 1
+        store.save(units)
+
+    return units, n_class, n_attr, n_val
+
+
+def _value_unit_kind_from_collection(graph, value_unit: dict) -> str:
+    """Resolve the collection ``kind`` (set/frozenset/list/Enum) from graph."""
+    anchor = value_unit.get("anchor") or {}
+    file = anchor.get("file", "")
+    name = value_unit.get("name", "")
+    for col in graph.value_locked_collections:
+        if col.file == file and col.name == name:
+            return col.kind
+    return "set"
 
 
 def _detect_and_lock_language(root: Path) -> None:
