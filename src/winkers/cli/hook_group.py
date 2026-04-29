@@ -45,14 +45,6 @@ def hook_post_write(path: str):
     run(Path(path).resolve())
 
 
-@hook.command("session-audit")
-@click.argument("path", default=".", type=click.Path(exists=True))
-def hook_session_audit(path: str):
-    """Stop hook: session audit gate (muted in 0.8.1 — left for legacy settings.json)."""
-    from winkers.hooks.session_audit import run
-    run(Path(path).resolve())
-
-
 @hook.command("session-start")
 @click.argument("path", default=".", type=click.Path(exists=True))
 def hook_session_start(path: str):
