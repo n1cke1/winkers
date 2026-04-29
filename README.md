@@ -36,28 +36,34 @@ Without the API key, the graph still works — semantic enrichment is skipped.
 
 | Tool | Purpose |
 |------|---------|
-| `orient(include, zone?, min_callers?)` | Project map: zones, conventions, hotspots, routes, UI map, functions graph |
-| `find_work_area(query, k?)` | Semantic search over per-unit descriptions; returns top-k matches with file + line ranges (**experimental** — see below) |
-| `before_create(intent, zone?)` | Pre-edit check: existing implementations, affected callers, risk |
-| `browse(zone?, file?, min_callers?)` | Mid-level inventory: functions + intents in a zone or file (paginated) |
-| `scope(function?, file?)` | Deep context: callers, callees, related rules, semantic context, impact |
+| `orient(task, include, zone?, min_callers?, k?)` | Project map (zones, conventions, hotspots, routes, UI map, functions graph) **plus** `semantic_matches` — top-K relevant units ranked by embedding similarity against `task`. Single first call. |
+| `before_create(intent, zone?)` | Pre-edit check: existing implementations, affected callers, risk, `similar_logic` warnings |
+| `browse(zone?, file?, min_callers?, limit?, offset?)` | Mid-level inventory: functions + intents in a zone or file (paginated). With `file=`, caller call-sites are inlined per fn |
+| `scope(function?, file?)` | Deep context: callers, callees, related rules, semantic context, pre-computed impact |
 | `convention_read(target)` | Zone intent, data flow, domain context, checklist |
 | `rule_read(category)` | All rules for a category with wrong_approach |
-| `impact_check(file_path)` | Incremental graph update + duplicate + broken-import check (auto via post-write hook in Claude Code) |
+| `impact_check(file_path)` | Incremental graph update + impact + coherence check (auto via post-write hook in Claude Code) |
+| `session_done()` | Optional final-audit verdict (PASS / WARN / FAIL) over the writes in the session |
 
-The agent typically calls `orient(["map","conventions"])` first, then either
-`find_work_area("<task>")` (when the work area isn't obvious) or `before_create()` /
-`scope()` directly (when explicit fn/file targets exist). Token budget
-(default 2000) prevents context overflow.
+The agent calls `orient(task="<what you were asked to do>", include=["map","conventions","rules_list"])`
+first — it bundles the architectural sections **and** semantic_matches against the task in one trip.
+Then `before_create()` / `scope()` for the specific edit, then `impact_check()` after writing
+(automatic in Claude Code). Token budget (default 2500) prevents context overflow.
 
-### Semantic search (experimental)
+### Semantic search (built into `orient`)
 
-`find_work_area` uses **local BGE-M3 embeddings** (1024-dim, multilingual; no
-API key required). Served via ONNX-INT8 (`Xenova/bge-m3`,
-`sentence_transformers_int8.onnx`, 568 MB on disk): cold load ~3 s, warm
-batch ~0.1 s, **~1.1 GiB RAM** resident. Build the per-unit index with
-`winkers init --with-units`; without it, `find_work_area` returns a
-"build the index" hint and the agent falls back to `before_create` / Grep.
+`orient(task=…)` runs a per-unit semantic search internally and returns
+`semantic_matches`. The previous standalone `find_work_area` MCP tool
+was folded into this since 0.9.0 — agents no longer need a separate
+two-step orient + find_work_area dance.
+
+Embeddings use **local BGE-M3** (1024-dim, multilingual; no API key
+required) served via ONNX-INT8 (`Xenova/bge-m3`,
+`sentence_transformers_int8.onnx`, 568 MB on disk): cold load ~3 s,
+warm batch ~0.1 s, **~1.1 GiB RAM** resident. Build the per-unit index
+with `winkers init --with-units`; without it, `orient` returns a
+"build the index" hint in `semantic_hint` and the agent falls back to
+`before_create` / Grep.
 
 Quality vs the original sentence-transformers float32 stack on a real
 417-unit codebase, 15 representative queries: top-1 match 73%, top-5
@@ -81,6 +87,7 @@ Tips for memory-tight hosts (~2 GiB RAM):
 winkers init                   # build graph + semantic + register MCP
 winkers init --no-semantic     # graph only, no API call
 winkers init --force           # force semantic re-enrichment
+winkers init --with-units      # description-first units pipeline + BGE-M3 embeddings
 winkers serve                  # MCP server (stdio)
 winkers dashboard              # browser graph at localhost:7420
 winkers doctor                 # check dependencies, graph, API key
@@ -91,7 +98,8 @@ winkers improve --apply        # inject insights into semantic.json
 winkers protect --startup      # trace startup import chain
 winkers hooks                  # install commit format + git hooks
 winkers commits --range R      # normalize commit messages
-winkers conventions-migrate    # import old conventions to rules.json
+winkers debug describe-fn ID   # re-author one unit (prompt iteration)
+winkers debug intent-eval -n N # evaluate intent provider quality
 ```
 
 ## Improve loop

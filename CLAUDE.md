@@ -10,35 +10,36 @@
 - `src/winkers/semantic.py` — SemanticLayer: Claude API enrichment → .winkers/semantic.json
 - `src/winkers/ui_map.py` — UIMap: scan HTML/Jinja2 templates → link Flask routes to UI elements (panels, tables, forms, buttons, inputs, tabs, indicators)
 - `src/winkers/languages/` — language profiles: Python, TypeScript, JavaScript, Java, Go, Rust, C#
-- `src/winkers/mcp/` — MCP server (tools: orient, find_work_area, browse, scope, convention_read, rule_read, before_create, impact_check, session_done) + auto-rebuild on file changes
-- `src/winkers/embeddings/` — BGE-M3 (sentence-transformers) embedding builder + on-disk index (`.winkers/embeddings.npz`). Background preload on `serve` start, bounded `wait_for_preload(timeout)` for `find_work_area` to ride out warmup. CPU-only torch, ~1.7 GiB RAM resident when warm
+- `src/winkers/mcp/` — MCP server. `tools/` is a package: one module per tool (`orient.py`, `scope.py`, `convention_read.py`, `rule_read.py`, `before_create.py`, `browse.py`, `impact_check.py`, `session_done.py`) + `_common.py` (shared loaders + graph helpers). `find_work_area.py` lives here too but is a private helper invoked from `orient` — not registered as a public MCP tool.
+- `src/winkers/embeddings/` — BGE-M3 via ONNX-INT8 (`Xenova/bge-m3`, ~1.1 GiB resident) + on-disk index (`.winkers/embeddings.npz`). Background preload on `serve` start, bounded `wait_for_preload(timeout)` rides out warmup. Set `WINKERS_USE_LEGACY_ST=1` to fall back to the float32 sentence-transformers stack.
 - `src/winkers/target_resolution.py` — intent categorization (create / change / unknown) + regex target extraction from graph's name dictionary
 - `src/winkers/value_locked.py` — AST detector for module-level literal collections (set/frozenset, ≤64 values), their consumer functions, and caller literal-arg usage. Powers `value_locked` warnings in scope/before_create/impact_check.
 - `src/winkers/impact/` — pre-computed impact analysis: models (`ImpactReport`, `CallerClassification`), `ImpactStore` (load/save/prune `.winkers/impact.json`), combined LLM prompt (intent + impact in one call), `ImpactGenerator` (FunctionContext, content_hash cache, batch concurrency, progress bar). Runs at `winkers init` when Claude API is configured.
-- `src/winkers/hooks/` — Claude Code hooks: prompt_enrich, pre_write, post_write, session_audit
+- `src/winkers/hooks/` — Claude Code hooks: prompt_enrich, pre_write, post_write, session_start, stop_audit (+ legacy session_audit module kept for migration sweeps).
 - `src/winkers/intent/` — LLM intent generation: provider.py (Ollama/API/None), eval_cli.py
 - `src/winkers/detection/` — duplicates.py (AST hash, name similarity), impact.py (signature diff)
 - `src/winkers/session/` — state.py (SessionState, WriteEvent, Warning, SessionStore)
-- `src/winkers/search.py` — function search by intent (tokenizer, stemmer, token cache)
+- `src/winkers/search.py` — function search by intent (tokenizer, stemmer, token cache); used by `before_create`, no longer surfaced as a CLI command
 - `src/winkers/dashboard/` — aiohttp + Cytoscape.js browser dashboard
-- `src/winkers/cli/` — CLI (click): init, serve, dashboard, search, hook, intent
+- `src/winkers/cli/` — CLI (click). `main.py` is a thin orchestrator (~110 LoC). Concrete commands live in `cli/commands/<name>.py`. Subgroups: `cli/hook_group.py` (Claude Code hooks), `cli/debug_group.py` (single-unit re-author + intent eval). Init's pipeline helpers live in `cli/init_pipeline/` (units, semantic, install, bootstrap, pipelines).
 
 ## Commands
 
 ```bash
-.venv/Scripts/pytest tests/ -v       # run tests
-.venv/Scripts/ruff check src/ tests/ # lint
+.venv/bin/pytest tests/ -v            # run tests
+.venv/bin/ruff check src/ tests/      # lint
 winkers init                          # build graph + semantic + rules audit + hooks
 winkers init --no-semantic            # graph only, no API call
 winkers init --force/-f               # force re-enrichment even if graph unchanged
 winkers init --yes/-y                 # auto-accept all rule proposals (no interactive review)
 winkers init --ollama gemma3:4b       # use local Ollama for intent generation
 winkers init --no-llm                 # skip intent generation
-winkers search "calculate price"      # search functions by intent
-winkers intent eval --sample 20 --json  # evaluate intent quality
+winkers init --with-units             # description-first units pipeline + BGE-M3 embeddings
 winkers serve                         # MCP server (stdio)
 winkers dashboard                     # browser graph
-winkers conventions-migrate           # import conventions from existing semantic.json
+winkers doctor                        # health check (deps, graph, API key, MCP wiring)
+winkers debug intent-eval --sample 20 --json   # evaluate intent quality
+winkers debug describe-fn <fn_id>     # re-author one function unit (prompt iteration)
 ```
 
 ## Rules
@@ -56,10 +57,12 @@ winkers conventions-migrate           # import conventions from existing semanti
 - **semantic.json** — intent: zone intents, data_flow, domain_context, checklist (generated by Claude API, one call)
 - **rules.json** — conventions/rules (ConventionRule with stats; generated by LLM audit + detectors, accepted by user). Coherence rules: sync_with, fix_approach (sync/derived/refactor)
 - **impact.json** — per-function LLM-assessed risk: risk_level, caller_classifications, safe/dangerous ops, action_plan. Combined with intent in one LLM call at init time; cached by content_hash.
+- **units.json + embeddings.npz** — per-unit LLM descriptions (function/class/attribute/value/template/data) + BGE-M3 vectors. Built by `init --with-units`. Read by `orient(task=…)` for `semantic_matches`.
+- **expressions.json** — AST expression-uses index for `value_locked` impact (Path 2 of literal-blind fix). Built by `init`.
 - **session.json** — ephemeral: writes, warnings, session_done_calls (lives during MCP session, gitignored)
 - **config.toml** — intent provider settings: provider, model, prompt_template
 
-Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
+Zero duplication. Graph = facts. Semantic = meaning. Rules = standards. Units + embeddings = retrieval surface.
 
 ## Semantic schema
 
@@ -72,7 +75,7 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 ## MCP tools (8 total)
 
-- `orient(include, zone?, min_callers?)` — single entry point; include: "map", "conventions", "rules_list", "functions_graph", "hotspots", "routes", "ui_map". Shows session status if active.
+- `orient(task, include, zone?, min_callers?, k?)` — single entry point. `task` is mandatory; orient runs the per-unit semantic search internally and returns `semantic_matches` alongside the requested sections (`map`, `conventions`, `rules_list`, `functions_graph`, `hotspots`, `routes`, `ui_map`). Shows session status if active.
 - `browse(zone?, file?, min_callers?, limit?, offset?)` — mid-level function inventory between orient and scope. Returns `"file::fn (callers) — intent"` strings, paginated. Intent omitted when null. With `file=`, caller call-sites are inlined under each fn as `"  ← caller_file:line  expression"` — browse becomes a one-shot "who calls what I'm about to edit" view. Use after orient to scan what functions exist and what they do before picking a target.
 - `scope(function?, file?)` — deep context: callers, callees, related_rules, recent changes. Function-level response also returns pre-computed `impact` (risk_level/safe+dangerous ops/classified callers/action_plan) and `similar_logic` (functions sharing `secondary_intents`) when impact.json exists.
 - `convention_read(target)` — zone name as in conventions (e.g. "app.py") / "data_flow" / "domain_context" / "checklist"
@@ -81,6 +84,8 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `impact_check(file_path)` — incremental graph update, impact analysis, coherence check, session state (renamed from `after_create` in 0.8.1)
 - `session_done()` — optional final session audit across all writes; anti-loop (FAIL max once)
 
+`find_work_area` is no longer registered as a public tool — its functionality is bundled into `orient(task=…)`. The implementation stays as a private helper used by orient.
+
 ## Test fixtures
 
 - `tests/fixtures/python_project/` — modules/pricing.py, modules/inventory.py, api/prices.py, models.py
@@ -88,14 +93,14 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 - `tests/fixtures/java_project/`, `go_project/`, `rust_project/`, `csharp_project/`
 - `tests/fixtures/flask_project/` — app.py, templates/index.html, templates/products/list.html
 
-<!-- winkers-snippet-version: 0.8.4 -->
+<!-- winkers-snippet-version: 0.9.0 -->
 ## Architectural context (Winkers)
 
 [Winkers](https://github.com/n1cke1/winkers) MCP: function-level dependency graph, zones, rules. Use before non-trivial edits.
 
 ### Workflow
 
-1. `orient` with `task: "<what you were asked to do>"`, `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, coding rules, **plus** `semantic_matches` (top-K relevant units ranked by embedding similarity against your task). `task` is **mandatory**. **First call.** Replaces the prior orient + find_work_area two-step.
+1. `orient` with `task: "<what you were asked to do>"`, `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, coding rules, **plus** `semantic_matches` (top-K relevant units ranked by embedding similarity against your task). `task` is **mandatory**. **First call.** Bundles the per-unit semantic search that was previously a separate `find_work_area` step.
 2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
 3. `before_create` with `intent: "<what you're about to change>"` — matches, affected callers (expressions + risk), `similar_logic`. **Prefer explicit targets** (`fn_name()` / `Class.method()` / `Class.attribute` / path / `file.py::fn`). **One call per concrete change** — batched intents dilute signal. **Before writing any code.**
 4. Write / edit code.
@@ -147,7 +152,9 @@ Both follow the same structural rules. A useful task/intent is:
 
 - **locked** — has callers; don't change signature without updating them.
 - **free** — no callers; modify freely.
+- **value_locked** — module-level literal set; removing a value breaks callers passing it as a literal.
 - **risk_level** — `low`/`medium`/`high`/`critical` per function from `scope.impact` / `hotspots`; heed `dangerous_operations` before editing.
 - **secondary_intents** — inline sub-task tags; `similar_logic` flags duplicated logic — extract rather than duplicate.
 - **direct_caller_files** vs **migration_cost** (`before_create.files`) — `direct_caller_files` = files that actually *call* the fn being changed (tight surface). `migration_cost` = raw import-edge count (loose upper bound). Prefer `direct_caller_files` on fn-level intents.
 - **route / http_method** — HTTP-handler marker (Flask / FastAPI / Django / aiohttp). Inlined in `scope`, `browse` (`[METHOD /path]`), `hotspots`, `before_create.affected_fns`.
+<!-- winkers-snippet-end -->
