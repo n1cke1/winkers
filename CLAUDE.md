@@ -95,11 +95,42 @@ Zero duplication. Graph = facts. Semantic = meaning. Rules = standards.
 
 ### Workflow
 
-1. `orient` with `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, and coding rules with `title` + `wrong_approach` one-liner per rule. **First call.**
+1. `orient` with `task: "<what you were asked to do>"`, `include: ["map", "conventions", "rules_list"]` — zones, hotspots, data flow, zone intents, coding rules, **plus** `semantic_matches` (top-K relevant units ranked by embedding similarity against your task). `task` is **mandatory**. **First call.** Replaces the prior orient + find_work_area two-step.
 2. `browse` with `zone` or `file` — mid-level inventory: function list with LLM intents (`"file::fn (callers) — intent"`). With `file=`, caller call-sites are inlined under each fn (`"  ← caller_file:line  expression"`) so you see who invokes what before editing. Use to pick a target before deep-dive.
-3. `before_create` with `intent: "<what you want>"` — matches, affected callers (expressions + risk), `similar_logic`. **Prefer explicit targets** (`fn_name()` / `Class.method()` / path / `file.py::fn`). **One call per concrete change** — batched intents dilute signal. **Before writing any code.**
+3. `before_create` with `intent: "<what you're about to change>"` — matches, affected callers (expressions + risk), `similar_logic`. **Prefer explicit targets** (`fn_name()` / `Class.method()` / `Class.attribute` / path / `file.py::fn`). **One call per concrete change** — batched intents dilute signal. **Before writing any code.**
 4. Write / edit code.
 5. `impact_check` with `file_path: "<path>"` — graph update + duplicate detection + broken import check. Auto via hook in Claude Code; call explicitly in other agents.
+
+### Task / intent formation rules
+
+`task` (orient) and `intent` (before_create) are **two distinct inputs**:
+- **`task`** — task-level, broad: what was assigned to you. Set once per session.
+- **`intent`** — change-level, narrow: what you're about to modify right now. Set per concrete change.
+
+Both follow the same structural rules. A useful task/intent is:
+
+| Component | Required? | Example |
+|-----------|-----------|---------|
+| Verb-first | required | `create` / `change` / `fix` / `add` / `refactor` / `extract` / `remove` / `rename` / `audit` / `simplify` |
+| Target if applicable | for `intent`: strongly preferred; for `task`: optional | `Class.method()`, `Class.attribute`, `file.py::fn`, path |
+| Goal in one phrase | required | what should become, not how to get there |
+| One concern | required | no `and` / `&` / multi-task lists |
+
+**✅ Good:**
+- `simplify invoice statuses from 6 to 3`
+- `fix Client.invoices relationship cascade`
+- `add soft-delete to all financial repos`
+- `extract date utilities from app/services/billing.py`
+- `audit soft-delete consistency across repos`
+
+**❌ Bad:**
+- `improve invoice handling` — no concrete verb, no scope
+- `invoices` / `statuses` — bare noun
+- `fix bug X and add feature Y` — multi-task, dilutes intent fulfillment audit
+- `rewrite using Pydantic v2` — implementation-first, goal lost
+- `make it better` / `refactor everything` — no target, no verb specificity
+
+`orient` returns `task_warnings` (non-blocking) when the task is structurally weak: < 3 words, multi-task markers, or no semantic_matches scoring above 0.5. Treat warnings as guidance, not gates.
 
 ### On demand
 
