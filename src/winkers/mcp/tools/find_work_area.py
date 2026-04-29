@@ -1,54 +1,16 @@
-"""MCP tool: find_work_area — semantic search over per-unit LLM descriptions."""
+"""Semantic search over per-unit LLM descriptions.
+
+Internal helper for `orient` — orient calls `_tool_find_work_area` to
+populate `semantic_matches` against the registered task. No longer
+exposed as a standalone MCP tool (was deprecated since 0.9; the
+two-step orient + find_work_area pattern was merged into orient).
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from mcp.types import Tool
-
 from winkers.models import Graph
-
-TOOL = Tool(
-    name="find_work_area",
-    description=(
-        "DEPRECATED — use orient(task=...) instead. orient now"
-        " always returns semantic_matches against the registered"
-        " task. find_work_area is kept as an alias for one minor"
-        " for existing scripts/agents and will be removed."
-        " Locate where in the codebase to make a change."
-        " Describe the task in 1-2 sentences in any language —"
-        " plain prose, mixing Russian and English domain terms"
-        " is fine."
-        " Returns top-K relevant function_units and"
-        " traceability_units (UI sections, cross-file couplings)"
-        " with confidence verdict."
-        " On verdict='OK': top match is the place to start."
-        " On verdict='NO_CLEAR_MATCH': no existing unit fits well"
-        " — likely a new feature, or the query uses domain"
-        " vocabulary missing from the index."
-        " Requires `winkers init --with-units` to have run; falls"
-        " back to an error message otherwise."
-    ),
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": (
-                    "What you want to do, in natural language."
-                    " Examples: 'добавить переключатель темы',"
-                    " 'fix negative condensate in SLP loop',"
-                    " 'where does the IDX dict live'."
-                ),
-            },
-            "k": {
-                "type": "integer",
-                "description": "Top-K matches to return (default 5)",
-            },
-        },
-        "required": ["query"],
-    },
-)
 
 # Adaptive threshold (validated on CHP tickets in Phase 0 spike). Hard
 # 0.55 catches confident matches; 0.45 floor + score gap salvages
