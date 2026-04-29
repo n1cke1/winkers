@@ -6,7 +6,30 @@ from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
 
+from mcp.types import Tool
+
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="impact_check",
+    description=(
+        "Call after writing, editing, or deleting code. Updates the project"
+        " graph and checks for issues. Returns impact analysis for changed"
+        " functions, coherence checklist, and session status summary."
+        " In Claude Code this runs automatically via the post-write hook;"
+        " call explicitly for re-check or files you didn't edit directly."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Relative path to the modified file",
+            },
+        },
+        "required": ["file_path"],
+    },
+)
 
 
 def _tool_impact_check(

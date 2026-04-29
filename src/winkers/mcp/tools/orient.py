@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import (
     MAX_ORIENT_TOKENS,
     _attach_route,
@@ -23,6 +25,79 @@ from winkers.mcp.tools._common import (
 )
 from winkers.mcp.tools.find_work_area import _tool_find_work_area
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="orient",
+    description=(
+        "IMPORTANT: Call this FIRST."
+        " Provide your task in `task` (mandatory): a one-sentence"
+        " description of what was assigned to you (verb + scope)."
+        " orient returns the standard project context PLUS"
+        " `semantic_matches` — top-K relevant units (functions,"
+        " UI sections, couplings) ranked by embedding similarity"
+        " against your task. Replaces the prior orient + "
+        "find_work_area two-step."
+        " Pass `include` as an array of section names,"
+        " e.g. include=['map','rules_list']."
+        " Do NOT serialize as a JSON-encoded string."
+        " 'map' = project structure, zones, hotspots, data flow."
+        " 'conventions' = domain context, zone intents, business logic."
+        " 'rules_list' = coding rules grouped by category."
+        " 'functions_graph' = indexed call graph."
+        " 'hotspots' = high-impact functions."
+        " 'routes' = HTTP endpoints (Flask/FastAPI/Django/aiohttp)."
+        " Route info is also inlined per-fn in scope/browse/"
+        "hotspots/before_create — this section is rarely needed."
+        " 'ui_map' = route→template links with UI elements."
+        " Then use convention_read/rule_read for details."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": (
+                    "What you were asked to do — verb + scope, one"
+                    " sentence. Examples: 'simplify invoice statuses"
+                    " from 6 to 3', 'fix Client.invoices relationship"
+                    " cascade', 'audit soft-delete consistency across"
+                    " repos'. If exploratory, paste the task verbatim"
+                    " ('explore project structure' is OK). Used for"
+                    " semantic_matches AND registered for post-session"
+                    " task fulfillment audit."
+                ),
+            },
+            "include": {
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "string"},
+                ],
+                "description": (
+                    "Array of section names, e.g. ['map','rules_list']."
+                    " A single section name string is also accepted."
+                    " Valid names: 'map', 'conventions', 'rules_list',"
+                    " 'functions_graph', 'hotspots', 'routes', 'ui_map'."
+                ),
+            },
+            "zone": {
+                "type": "string",
+                "description": "Filter map/functions_graph by zone name",
+            },
+            "min_callers": {
+                "type": "integer",
+                "description": "Min callers for hotspots (default 10)",
+            },
+            "k": {
+                "type": "integer",
+                "description": (
+                    "Top-K semantic_matches to return (default 5)."
+                ),
+            },
+        },
+        "required": ["task", "include"],
+    },
+)
+
 
 # Priority order: most important sections first for truncation.
 _SECTION_PRIORITY = [

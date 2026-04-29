@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import (
     _attach_route,
     _build_callers_constraint,
@@ -19,6 +21,33 @@ from winkers.mcp.tools._common import (
     _value_locked_for_file,
 )
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="scope",
+    description=(
+        "Deep context for one function or file."
+        " function=: callers + callees with call-site expressions,"
+        " `route`/`http_method` when the fn is an HTTP handler,"
+        " pre-computed `impact` (risk_level, safe/dangerous_operations,"
+        " caller_classifications, action_plan), `similar_logic`"
+        " (functions sharing secondary_intents), related rules,"
+        " recent git changes."
+        " file=: per-fn entries (with route when applicable),"
+        " imports, `migration_cost`, `value_locked_collections`,"
+        " startup_chain warning."
+        " Accepts `file::fn` or `file::Class.method` ids."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "function": {
+                "type": "string",
+                "description": "Function id: `file::fn` or `file::Class.method`",
+            },
+            "file": {"type": "string", "description": "Relative file path"},
+        },
+    },
+)
 
 
 def _tool_scope(graph: Graph, args: dict, root: Path | None = None) -> dict:

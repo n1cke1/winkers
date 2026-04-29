@@ -4,7 +4,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import _load_rules
+
+TOOL = Tool(
+    name="rule_read",
+    description=(
+        "Read all coding rules for a category."
+        " Returns list of rules with content, wrong_approach, and related categories."
+        " Use orient(include=['rules_list']) to see available categories."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "description": "Rule category name",
+            },
+        },
+        "required": ["category"],
+    },
+)
 
 
 def _tool_rule_read(args: dict, root: Path) -> dict:

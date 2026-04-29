@@ -4,8 +4,49 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import _attach_route, _load_impact
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="before_create",
+    description=(
+        "CALL THIS BEFORE writing, editing, or deleting code."
+        " For creates: searches the graph for existing implementations"
+        " matching your intent (reuse over duplicate)."
+        " For changes: returns affected files/functions, caller impact,"
+        " migration cost, risk level, and similar_logic warnings."
+        " PREFER explicit targets in your intent: `fn_name()` for"
+        " functions, `Class.method()` for methods, relative file"
+        " paths (`app/repos/invoice.py`), or `file.py::fn` notation."
+        " Explicit targets give a precise response; plain language"
+        " falls back to fuzzy matching with a tests/ filter."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "intent": {
+                "type": "string",
+                "description": (
+                    "What you want to do, in natural language."
+                    " Use explicit markers for precision —"
+                    " examples: 'refactor calculate_price() in"
+                    " modules/pricing.py to round half-even',"
+                    " 'fix InvoiceRepo.get_with_items() selectinload',"
+                    " 'rename modules/pricing.py::calc_tax to"
+                    " apply_tax'. Creates may be plain:"
+                    " 'add batch discount feature'."
+                ),
+            },
+            "zone": {
+                "type": "string",
+                "description": "Zone to search in. Empty = search all zones.",
+            },
+        },
+        "required": ["intent"],
+    },
+)
 
 _AFFECTED_FNS_LIMIT = 5  # cap for zone-expanded function lists
 
