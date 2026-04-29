@@ -52,9 +52,9 @@ class _OnnxBgeM3:
     """
 
     def __init__(self) -> None:
+        import onnxruntime as ort
         from huggingface_hub import snapshot_download
         from tokenizers import Tokenizer
-        import onnxruntime as ort
 
         snap = snapshot_download(
             repo_id=_ONNX_REPO,

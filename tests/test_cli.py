@@ -56,12 +56,16 @@ def test_init_autodetects_claude_code(project: Path):
     assert mcp_json.exists()
     import json as _json
     mcp_data = _json.loads(mcp_json.read_text(encoding="utf-8"))
-    assert mcp_data["mcpServers"]["winkers"]["command"] == "uvx"
+    # `command` is the absolute path to the winkers binary (or bare "winkers"
+    # fallback when no venv/PATH match). Set to absolute since 600cfb9 so
+    # subprocess contexts with stripped PATH (systemd, ticket runners) keep
+    # working — `uvx winkers serve` is no longer the default.
+    cmd = mcp_data["mcpServers"]["winkers"]["command"]
+    assert cmd.endswith("winkers") or cmd.endswith("winkers.exe") or cmd == "winkers"
     args = mcp_data["mcpServers"]["winkers"]["args"]
-    assert args[0] == "winkers"
-    assert args[1] == "serve"
-    # Third arg is the absolute project path (not ".")
-    assert str(project).replace("\\", "/") in args[2]
+    assert args[0] == "serve"
+    # Second arg is the absolute project path (not ".")
+    assert str(project).replace("\\", "/") in args[1]
     # Project-level settings.json has SessionEnd hook
     proj_settings = project / ".claude" / "settings.json"
     assert proj_settings.exists()
