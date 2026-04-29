@@ -20,9 +20,12 @@ from pathlib import Path
 
 from winkers.descriptions.models import Description, parse_description_response
 from winkers.descriptions.prompts import (
+    format_attribute_prompt,
+    format_class_prompt,
     format_data_file_prompt,
     format_function_prompt,
     format_template_section_prompt,
+    format_value_prompt,
 )
 
 log = logging.getLogger(__name__)
@@ -69,6 +72,82 @@ def author_data_file_description(
 ) -> Description | None:
     """Generate a description for one data file. Returns None on failure."""
     prompt = format_data_file_prompt(file_content, file_path)
+    return _run_claude(prompt, cwd=cwd, timeout=timeout_seconds)
+
+
+def author_class_description(
+    class_name: str,
+    file_path: str,
+    line_start: int,
+    line_end: int,
+    base_classes: list[str],
+    method_signatures: list[str],
+    attribute_lines: list[str],
+    docstring: str = "",
+    cwd: str | Path | None = None,
+    timeout_seconds: int = _DEFAULT_TIMEOUT,
+) -> Description | None:
+    """Generate a description for one class_unit. Returns None on failure."""
+    prompt = format_class_prompt(
+        class_name=class_name,
+        file_path=file_path,
+        line_start=line_start,
+        line_end=line_end,
+        base_classes=base_classes,
+        method_signatures=method_signatures,
+        attribute_lines=attribute_lines,
+        docstring=docstring,
+    )
+    return _run_claude(prompt, cwd=cwd, timeout=timeout_seconds)
+
+
+def author_attribute_description(
+    name: str,
+    class_name: str,
+    file_path: str,
+    line: int,
+    ctor: str,
+    annotation: str,
+    source_line: str,
+    class_summary: str = "",
+    cwd: str | Path | None = None,
+    timeout_seconds: int = _DEFAULT_TIMEOUT,
+) -> Description | None:
+    """Generate a description for one attribute_unit. Returns None on failure."""
+    prompt = format_attribute_prompt(
+        name=name,
+        class_name=class_name,
+        file_path=file_path,
+        line=line,
+        ctor=ctor,
+        annotation=annotation,
+        source_line=source_line,
+        class_summary=class_summary,
+    )
+    return _run_claude(prompt, cwd=cwd, timeout=timeout_seconds)
+
+
+def author_value_description(
+    name: str,
+    file_path: str,
+    line: int,
+    kind: str,
+    values: list[str],
+    consumer_count: int,
+    consumer_files: list[str],
+    cwd: str | Path | None = None,
+    timeout_seconds: int = _DEFAULT_TIMEOUT,
+) -> Description | None:
+    """Generate a description for one value_unit. Returns None on failure."""
+    prompt = format_value_prompt(
+        name=name,
+        file_path=file_path,
+        line=line,
+        kind=kind,
+        values=values,
+        consumer_count=consumer_count,
+        consumer_files=consumer_files,
+    )
     return _run_claude(prompt, cwd=cwd, timeout=timeout_seconds)
 
 

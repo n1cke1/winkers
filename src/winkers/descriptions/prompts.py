@@ -290,3 +290,215 @@ def format_template_section_prompt(
         "```",
     ])
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Class / attribute / value unit prompts (Wave 5a + Wave 4c-2)
+# ---------------------------------------------------------------------------
+
+_CLASS_PROMPT = """\
+You are documenting a class for a semantic search index. The agent
+uses descriptions to locate the right class to modify given a
+natural-language task.
+
+{description_rules}
+
+{output_schema}
+
+EXAMPLES of good hardcoded_artifacts for a class:
+- Pinned status enum members the class checks against (kind="id_list").
+- Schema column counter ("33 переменных") matching template text.
+- Required base-class names downstream code depends on (kind="identifier").
+
+PROSE GUIDANCE FOR CLASSES:
+- Open with what the class represents in the domain (single sentence).
+- Then state lifecycle: when instances are created, when they're destroyed,
+  what mutates them (which methods).
+- One non-trivial invariant a naive edit would break — e.g. "soft-deleted
+  via deleted_at instead of row removal", "id field is the FK target for
+  Invoice.client_id", "must call .commit() — auto-commit is OFF on this session".
+- If this is a pure data model (Pydantic / dataclass / SQLAlchemy
+  declarative), name the parent and the load-bearing field constraints.
+
+CLASS METADATA + SOURCE FOLLOW. Methods are listed by signature only
+(bodies elided to keep cache invalidation tight — a method body change
+shouldn't dirty the class description on its own).
+"""
+
+
+_ATTRIBUTE_PROMPT = """\
+You are documenting a class-body attribute for a semantic search index
+— typically a SQLAlchemy `relationship`, Pydantic `Field`, dataclass
+`field`, or similar configuration assignment.
+
+{description_rules}
+
+{output_schema}
+
+EXAMPLES of good hardcoded_artifacts for a class attribute:
+- The string target of a relationship (`relationship("Invoice", ...)`)
+  → kind="identifier", value="Invoice".
+- A `back_populates` partner key (kind="identifier").
+- A FK column name when this is a `mapped_column(ForeignKey("orders.id"))`
+  (kind="identifier", value="orders.id").
+- A cascade specifier when the agent typically searches "cascade delete":
+  → kind="phrase", value="all,delete-orphan".
+
+PROSE GUIDANCE FOR ATTRIBUTES:
+- Open with what role the attribute plays on its class (one sentence).
+- Then explain the relationship type or field shape — "many-to-one
+  back-populated by Invoice.client", "Pydantic constraint with default 0
+  and ge=0".
+- End with one non-trivial detail — a constraint that affects callers,
+  e.g. "selectinload required upstream — direct attribute access otherwise
+  triggers N+1", "Field(alias='client_id') — JSON payload uses
+  snake_case, model uses snake_case, FastAPI emits camelCase".
+
+ATTRIBUTE METADATA FOLLOWS — name (Class.attr), constructor call
+(relationship/Field/...), type annotation if any, and source line.
+"""
+
+
+_VALUE_PROMPT = """\
+You are documenting a module-level collection of literal values
+(``set`` / ``frozenset`` / ``dict`` / ``Enum``) for a semantic search
+index. The agent uses descriptions to locate the right collection
+when removing/renaming a domain value.
+
+{description_rules}
+
+{output_schema}
+
+EXAMPLES of good hardcoded_artifacts for a value collection:
+- Each member is itself a load-bearing identifier — emit them as a
+  single id_list artifact (kind="id_list", value=[<sorted members>]).
+- Numeric thresholds with domain meaning ("13 ата / 9 ата pressure
+  levels") → kind="threshold".
+- Domain phrase strings used by templates → kind="phrase".
+
+PROSE GUIDANCE FOR VALUE COLLECTIONS:
+- Open with what the collection represents in the domain (single sentence) —
+  what kind of entity these values denote.
+- State how the collection is consumed: "membership-tested by `is_valid_status`
+  in the same module and 4 callers across services", "iterated by the
+  template loop in tab_status.html".
+- End with the non-trivial detail — a known caller pattern that
+  silently breaks on removal: "removing 'paid' breaks invoice.html
+  literal text and 18 test assertions", "this enum is JSON-serialized
+  to the frontend — adding a value requires an API contract bump".
+
+COLLECTION METADATA + VALUES FOLLOW. Consumer counts and a sample of
+caller files are provided so the description can be specific about
+the blast radius.
+"""
+
+
+def format_class_prompt(
+    class_name: str,
+    file_path: str,
+    line_start: int,
+    line_end: int,
+    base_classes: list[str],
+    method_signatures: list[str],
+    attribute_lines: list[str],
+    docstring: str = "",
+) -> str:
+    """Render the full class_unit prompt.
+
+    `method_signatures` — one-line "def method(params)" entries (no bodies).
+    `attribute_lines` — verbatim source lines for each class-body
+    attribute assignment (already collected by the class_attrs scanner).
+    """
+    body = _CLASS_PROMPT.format(
+        description_rules=_DESCRIPTION_RULES,
+        output_schema=_OUTPUT_SCHEMA,
+    )
+    parts = [
+        body.rstrip(),
+        "",
+        f"CLASS: {class_name}  ({file_path}:{line_start}-{line_end})",
+    ]
+    if base_classes:
+        parts.append(f"BASES: {', '.join(base_classes)}")
+    if docstring:
+        parts.append("DOCSTRING:")
+        parts.append(docstring.strip())
+    if method_signatures:
+        parts.append("")
+        parts.append("METHODS (signatures only):")
+        for sig in method_signatures:
+            parts.append(f"  - {sig}")
+    if attribute_lines:
+        parts.append("")
+        parts.append("CLASS-BODY ATTRIBUTES:")
+        for ln in attribute_lines:
+            parts.append(f"  {ln.strip()}")
+    return "\n".join(parts)
+
+
+def format_attribute_prompt(
+    name: str,
+    class_name: str,
+    file_path: str,
+    line: int,
+    ctor: str,
+    annotation: str,
+    source_line: str,
+    class_summary: str = "",
+) -> str:
+    """Render the full attribute_unit prompt."""
+    body = _ATTRIBUTE_PROMPT.format(
+        description_rules=_DESCRIPTION_RULES,
+        output_schema=_OUTPUT_SCHEMA,
+    )
+    parts = [
+        body.rstrip(),
+        "",
+        f"ATTRIBUTE: {name}  ({file_path}:{line})",
+        f"CONSTRUCTOR: {ctor}",
+    ]
+    if annotation:
+        parts.append(f"ANNOTATION: {annotation}")
+    if class_summary:
+        parts.append(f"OWNING CLASS ({class_name}): {class_summary}")
+    parts.append("")
+    parts.append("SOURCE:")
+    parts.append("```python")
+    parts.append(source_line.strip())
+    parts.append("```")
+    return "\n".join(parts)
+
+
+def format_value_prompt(
+    name: str,
+    file_path: str,
+    line: int,
+    kind: str,
+    values: list[str],
+    consumer_count: int,
+    consumer_files: list[str],
+) -> str:
+    """Render the full value_unit prompt."""
+    body = _VALUE_PROMPT.format(
+        description_rules=_DESCRIPTION_RULES,
+        output_schema=_OUTPUT_SCHEMA,
+    )
+    parts = [
+        body.rstrip(),
+        "",
+        f"COLLECTION: {name}  ({file_path}:{line})",
+        f"KIND: {kind}",
+    ]
+    # Show all values up to a sane cap; collections > 64 values are
+    # already pruned by the detector.
+    sample = values[:32]
+    parts.append(f"VALUES ({len(values)} total): {sample!r}")
+    if len(values) > len(sample):
+        parts.append(f"  (+{len(values) - len(sample)} more elided)")
+    parts.append(
+        f"CONSUMERS: {consumer_count} function(s) "
+        f"across {len(consumer_files)} file(s)"
+    )
+    if consumer_files:
+        parts.append(f"CONSUMER FILES: {', '.join(consumer_files[:8])}")
+    return "\n".join(parts)
