@@ -4,8 +4,61 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import _route_marker
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="browse",
+    description=(
+        "Mid-level function inventory between orient and scope."
+        " Entry format: 'file::fn (callers) [METHOD /path]? — intent?'."
+        " With `file=`, caller call-sites are inlined under each fn"
+        " as '  ← caller_file:line  expression' — one-shot"
+        " 'who calls what I'm about to edit' view."
+        " When `zone=` yields 0 fns but matches real files, the"
+        " response surfaces `files_in_zone` so you can drill down"
+        " with browse(file=…). Paginated via limit/offset."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "zone": {
+                "type": "string",
+                "description": "Filter by zone name (see orient.map.zones).",
+            },
+            "file": {
+                "type": "string",
+                "description": (
+                    "Filter by exact file path."
+                    " Supersedes zone if both given."
+                ),
+            },
+            "min_callers": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 0},
+                    {"type": "string", "pattern": "^\\d+$"},
+                ],
+                "description": "Hide fns with fewer callers (default 0).",
+            },
+            "limit": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 1},
+                    {"type": "string", "pattern": "^\\d+$"},
+                ],
+                "description": "Page size (default 50, max 100).",
+            },
+            "offset": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 0},
+                    {"type": "string", "pattern": "^\\d+$"},
+                ],
+                "description": "Starting index into sorted results (default 0).",
+            },
+        },
+    },
+)
 
 _BROWSE_LIMIT_DEFAULT = 50
 _BROWSE_LIMIT_MAX = 100

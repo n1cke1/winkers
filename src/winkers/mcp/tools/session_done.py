@@ -4,7 +4,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mcp.types import Tool
+
 from winkers.models import Graph
+
+TOOL = Tool(
+    name="session_done",
+    description=(
+        "Optional final audit when your task is complete. Returns PASS or"
+        " FAIL across all writes in the session. Useful for cross-file"
+        " coherence review after a series of edits."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {},
+    },
+)
 
 
 def _tool_session_done(graph: Graph, root: Path) -> dict:

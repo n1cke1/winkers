@@ -4,7 +4,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mcp.types import Tool
+
 from winkers.mcp.tools._common import _load_semantic
+
+TOOL = Tool(
+    name="convention_read",
+    description=(
+        "Read detailed convention for a zone, file, or aspect."
+        " target = zone name as listed in conventions (e.g. 'app.py', 'old/'),"
+        " or 'data_flow' / 'domain_context' / 'checklist'."
+        " Use orient(include=['conventions']) first to see available zone names."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "Zone name, file path, or aspect name",
+            },
+        },
+        "required": ["target"],
+    },
+)
 
 
 def _tool_convention_read(args: dict, root: Path) -> dict:
