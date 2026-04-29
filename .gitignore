@@ -47,11 +47,6 @@ winkers_*.md
 .claude/scheduled_tasks.lock
 .mcp.json
 
-# Spike / dev-time artifacts under scripts/
-scripts/_*.log
-scripts/embeddings.npz
-scripts/units.json
-scripts/winkers_artifacts.tar.gz
-scripts/_sandbox*
-scripts/vps_*.py
+# Dev / spike scratch — not part of the package
+scripts/
 ui_traceability.json
