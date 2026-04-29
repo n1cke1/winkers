@@ -1,16 +1,29 @@
-"""winkers describe-fn / describe-section / describe-data."""
+"""`winkers debug ...` — development / prompt-tuning utilities.
+
+These commands aren't part of the day-to-day workflow; they exist so
+that prompt changes and provider config can be exercised on a single
+unit at a time. The full pipeline runs via `winkers init --with-units`
+(incremental, hash-aware) — only reach for these when you want to
+re-author / inspect one specific function, template section, data
+file, or to evaluate the intent provider.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
 
-# ---------------------------------------------------------------------------
-# describe-fn — Phase 1 description-author CLI
-# ---------------------------------------------------------------------------
+from winkers.store import GraphStore
 
-@click.command("describe-fn")
+
+@click.group()
+def debug():
+    """Development utilities — single-unit re-author, intent eval."""
+
+
+@debug.command("describe-fn")
 @click.argument("fn_id")
 @click.option("--root", "-r", default=".", type=click.Path(exists=True),
               help="Project root containing .winkers/graph.json")
@@ -28,7 +41,7 @@ def describe_fn(fn_id: str, root: str, dry_run: bool, save: bool):
 
     \b
     Example:
-      winkers describe-fn engine/chp_model.py::solve_design -r /path/to/project
+      winkers debug describe-fn engine/chp_model.py::solve_design -r /path/to/project
     """
     import json as _json
 
@@ -143,11 +156,7 @@ def describe_fn(fn_id: str, root: str, dry_run: bool, save: bool):
         click.echo(f"Saved to {units_path}", err=True)
 
 
-# ---------------------------------------------------------------------------
-# describe-section — Phase 1 description-author CLI for template sections
-# ---------------------------------------------------------------------------
-
-@click.command("describe-section")
+@debug.command("describe-section")
 @click.argument("section_ref")
 @click.option("--root", "-r", default=".", type=click.Path(exists=True),
               help="Project root")
@@ -162,8 +171,8 @@ def describe_section(section_ref: str, root: str, dry_run: bool, save: bool):
 
     \b
     Example:
-      winkers describe-section templates/index.html#calc-sub-approach \\
-                              --root /path/to/project
+      winkers debug describe-section templates/index.html#calc-sub-approach \\
+                                     --root /path/to/project
     """
     import json as _json
 
@@ -257,11 +266,7 @@ def describe_section(section_ref: str, root: str, dry_run: bool, save: bool):
         click.echo(f"Saved to {units_path}", err=True)
 
 
-# ---------------------------------------------------------------------------
-# describe-data — Phase 1.10 description-author CLI for data files
-# ---------------------------------------------------------------------------
-
-@click.command("describe-data")
+@debug.command("describe-data")
 @click.argument("file_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--root", "-r", default=".", type=click.Path(exists=True),
               help="Project root (file path is relative to this)")
@@ -274,7 +279,7 @@ def describe_data(file_path: str, root: str, dry_run: bool, save: bool):
 
     \b
     Example:
-      winkers describe-data data/tespy_topology.json -r /path/to/project
+      winkers debug describe-data data/tespy_topology.json -r /path/to/project
     """
     import json as _json
 
@@ -343,3 +348,71 @@ def describe_data(file_path: str, root: str, dry_run: bool, save: bool):
             encoding="utf-8",
         )
         click.echo(f"Saved to {units_path}", err=True)
+
+
+@debug.command("intent-eval")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--sample", "-n", default=20, help="Number of functions to sample.")
+@click.option("--prompt", "prompt_override", default=None, type=str,
+              help="Test an alternative prompt template.")
+@click.option("--compare", is_flag=True, default=False,
+              help="Compare existing intents with freshly generated ones.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Output as JSON.")
+def intent_eval(path: str, sample: int, prompt_override: str | None,
+                compare: bool, as_json: bool):
+    """Evaluate intent generation quality.
+
+    Requires a configured provider: ANTHROPIC_API_KEY (default)
+    or --ollama in .winkers/config.toml.
+
+    \b
+    Examples:
+        winkers debug intent-eval --sample 10 --json
+        winkers debug intent-eval --prompt "Describe this function:" --json
+        winkers debug intent-eval --compare
+    """
+    from winkers.intent.eval_cli import compare_intents, eval_intents
+    from winkers.intent.provider import auto_detect, load_config
+
+    root = Path(path).resolve()
+    store = GraphStore(root)
+    graph = store.load()
+    if graph is None:
+        click.echo("Error: graph not built. Run 'winkers init' first.", err=True)
+        raise SystemExit(1)
+
+    config = load_config(root)
+    provider = auto_detect(config)
+
+    from winkers.intent.provider import NoneProvider
+    if isinstance(provider, NoneProvider):
+        click.echo("Error: no LLM provider available.", err=True)
+        raise SystemExit(1)
+
+    if compare:
+        results = compare_intents(graph, root, provider, sample=sample)
+        if as_json:
+            click.echo(json.dumps(results, indent=2))
+        else:
+            for r in results:
+                changed = "CHANGED" if r["changed"] else "same"
+                click.echo(f"  [{changed}] {r['name']}")
+                click.echo(f"    current: {r['current']}")
+                click.echo(f"    new:     {r['new']}")
+        return
+
+    results = eval_intents(
+        graph, root, provider,
+        sample=sample, prompt_override=prompt_override,
+    )
+
+    if as_json:
+        click.echo(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            click.echo(f"  {r['name']} ({r['file']})")
+            click.echo(f"    sig:    {r['signature']}")
+            click.echo(f"    intent: {r['generated_intent']}")
+            click.echo()
+        click.echo(f"  {len(results)} functions evaluated.")

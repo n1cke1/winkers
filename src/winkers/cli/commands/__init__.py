@@ -6,7 +6,6 @@ import click
 
 from winkers.cli.commands.analyze import analyze
 from winkers.cli.commands.dashboard import dashboard
-from winkers.cli.commands.describe import describe_data, describe_fn, describe_section
 from winkers.cli.commands.doctor import doctor
 from winkers.cli.commands.git_cmds import autocommit, commit_fmt, commits_normalize, hooks_install
 from winkers.cli.commands.improve import improve
@@ -30,6 +29,3 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(commits_normalize)
     cli.add_command(serve)
     cli.add_command(dashboard)
-    cli.add_command(describe_fn)
-    cli.add_command(describe_section)
-    cli.add_command(describe_data)
