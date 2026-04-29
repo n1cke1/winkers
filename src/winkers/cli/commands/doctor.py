@@ -67,7 +67,10 @@ def _doctor_check_mcp_json(mcp_json: Path, root: Path, ok, warn) -> None:
     # root. Compare to the doctor's `root` to catch stale paths from a
     # copied project (the bug Issue #3 in the invoicekit feedback).
     root_arg = next(
-        (a for a in args if isinstance(a, str) and a not in ("serve",) and (Path(a).is_absolute() or "/" in a or "\\" in a)),
+        (a for a in args
+         if isinstance(a, str)
+         and a not in ("serve",)
+         and (Path(a).is_absolute() or "/" in a or "\\" in a)),
         None,
     )
     if root_arg:
@@ -126,7 +129,10 @@ def _doctor_check_user_mcp(root: Path, ok, warn) -> None:
 
     args = entry.get("args") or []
     root_arg = next(
-        (a for a in args if isinstance(a, str) and a not in ("serve",) and (Path(a).is_absolute() or "/" in a or "\\" in a)),
+        (a for a in args
+         if isinstance(a, str)
+         and a not in ("serve",)
+         and (Path(a).is_absolute() or "/" in a or "\\" in a)),
         None,
     )
     if not root_arg:
