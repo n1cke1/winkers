@@ -91,11 +91,11 @@ def _after_command(*_args, **_kwargs):
 
 # Subgroups defined in their own modules; register them as `cli` children
 # here so `winkers hook ...` and `winkers intent ...` resolve normally.
+from winkers.cli.debug_group import debug  # noqa: E402
 from winkers.cli.hook_group import hook  # noqa: E402
-from winkers.cli.intent_group import intent  # noqa: E402
 
 cli.add_command(hook)
-cli.add_command(intent)
+cli.add_command(debug)
 
 
 
