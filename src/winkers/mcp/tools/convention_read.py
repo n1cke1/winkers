@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from winkers.mcp.tools import _load_semantic
+from winkers.mcp.tools._common import _load_semantic
 
 
 def _tool_convention_read(args: dict, root: Path) -> dict:

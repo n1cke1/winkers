@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from winkers.mcp.tools import (
+from winkers.mcp.tools._common import (
     _attach_route,
     _build_callers_constraint,
     _file_fn_entry,

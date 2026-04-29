@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from winkers.mcp.tools import _load_rules
+from winkers.mcp.tools._common import _load_rules
 
 
 def _tool_rule_read(args: dict, root: Path) -> dict:
