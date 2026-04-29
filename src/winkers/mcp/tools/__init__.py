@@ -1,9 +1,13 @@
 """Winkers MCP tools — orient, scope, convention_read, rule_read,
-before_create, browse, impact_check, session_done, find_work_area.
+before_create, browse, impact_check, session_done.
 
-`register_tools` wires the 9 tool modules into the MCP server. Each
-module owns its own `Tool(...)` schema (`TOOL` constant) and `_tool_*`
-implementation; this file is just the dispatcher.
+`register_tools` wires the 8 publicly-registered tool modules into the
+MCP server. Each owns its own `Tool(...)` schema (`TOOL` constant) and
+`_tool_*` implementation; this file is just the dispatcher.
+
+`find_work_area` is imported but not registered — `orient` uses it
+internally to compute `semantic_matches`; the standalone tool was
+deprecated when orient absorbed its functionality.
 """
 
 from __future__ import annotations
@@ -19,7 +23,6 @@ from winkers.mcp.tools import (
     before_create,
     browse,
     convention_read,
-    find_work_area,
     impact_check,
     orient,
     rule_read,
@@ -65,7 +68,6 @@ _TOOL_MODULES = [
     (before_create, lambda g, a, r, gg: before_create._tool_before_create(g, a, r)),
     (browse, lambda g, a, r, gg: browse._tool_browse(g, a)),
     (impact_check, lambda g, a, r, gg: impact_check._tool_impact_check(g, a, r, gg)),
-    (find_work_area, lambda g, a, r, gg: find_work_area._tool_find_work_area(g, a, r)),
     (session_done, lambda g, a, r, gg: session_done._tool_session_done(g, r)),
 ]
 _DISPATCH = {m.TOOL.name: fn for m, fn in _TOOL_MODULES}
