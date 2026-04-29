@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from winkers.mcp.tools import _route_marker
+from winkers.mcp.tools._common import _route_marker
 from winkers.models import Graph
 
 _BROWSE_LIMIT_DEFAULT = 50
