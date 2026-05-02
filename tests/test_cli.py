@@ -90,6 +90,66 @@ def test_init_no_ide_detected(project: Path):
     assert "No IDE detected" in result.output
 
 
+# ---------------------------------------------------------------------------
+# _winkers_bin priority chain — CI regression guard
+# ---------------------------------------------------------------------------
+
+
+def test_winkers_bin_ignores_pytest_argv0(monkeypatch, tmp_path):
+    """sys.argv[0] under pytest points at .../bin/pytest; the resolver
+    must NOT treat it as the winkers binary just because it's an
+    absolute path that exists. Prior bug: CI run wrote `command:
+    "/opt/hostedtoolcache/.../bin/pytest"` into .mcp.json, breaking
+    `test_init_autodetects_claude_code` on every push since 1e132db.
+    """
+    from winkers.cli.init_pipeline import bootstrap
+
+    # Create a fake exe-dir layout mimicking the GitHub-runner
+    # hostedtoolcache (bin/python3 + bin/winkers siblings).
+    exe_dir = tmp_path / "bin"
+    exe_dir.mkdir()
+    fake_python = exe_dir / "python3"
+    fake_python.write_text("")
+    fake_winkers = exe_dir / "winkers"
+    fake_winkers.write_text("")
+    fake_pytest = exe_dir / "pytest"
+    fake_pytest.write_text("")
+
+    # No active venv, sys.argv[0]=pytest, sys.executable=python3 sibling.
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(bootstrap.sys, "argv", [str(fake_pytest)])
+    monkeypatch.setattr(bootstrap.sys, "executable", str(fake_python))
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
+
+    # Must skip the pytest argv[0] and pick up the sibling winkers
+    # script. (We don't assert "pytest not in result" — pytest's tmp_path
+    # convention is `/tmp/pytest-of-<user>/...`, so "pytest" appears in
+    # the parent path even on a correctly-resolved winkers binary.)
+    assert bootstrap._winkers_bin() == str(fake_winkers)
+
+
+def test_winkers_bin_uses_argv0_when_basename_matches(monkeypatch, tmp_path):
+    """When sys.argv[0] really IS the winkers entry script, prefer it
+    (preserves the original priority — pipx etc.)."""
+    from winkers.cli.init_pipeline import bootstrap
+
+    exe_dir = tmp_path / "bin"
+    exe_dir.mkdir()
+    fake_winkers = exe_dir / "winkers"
+    fake_winkers.write_text("")
+
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(bootstrap.sys, "argv", [str(fake_winkers)])
+    # sys.executable points elsewhere — argv[0] should still win.
+    other = tmp_path / "elsewhere" / "python3"
+    other.parent.mkdir()
+    other.write_text("")
+    monkeypatch.setattr(bootstrap.sys, "executable", str(other))
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
+
+    assert bootstrap._winkers_bin() == str(fake_winkers)
+
+
 def test_doctor_runs(project: Path):
     """doctor command runs and reports ok/warnings."""
     runner = CliRunner()
