@@ -18,6 +18,33 @@ from pathlib import Path
 import click
 
 
+def _impact_unit_reusable(existing: dict | None, *, force: bool) -> bool:
+    """Decide whether an impact-pass description can be reused as-is.
+
+    The unit-author pipeline tries to reuse impact-pass descriptions
+    (Wave 4d) so well-described functions don't trigger a redundant
+    `claude --print` call. The reuse path is unsafe when:
+
+      * `existing` has no description at all — nothing to reuse.
+      * `force=True` — caller passed `--force-units`; reuse is by
+        definition the wrong path.
+      * the description contains Cyrillic content — Issue 2's EN-only
+        embedding contract would silently break for projects whose
+        impact.json was authored before the language rule landed.
+
+    Centralised here so the predicate stays testable without spinning
+    up the full pipeline (ast_hash plumbing, scanners, embeddings).
+    """
+    if not existing or not existing.get("description"):
+        return False
+    if force:
+        return False
+    from winkers.descriptions.translator import has_cyrillic
+    if has_cyrillic(existing["description"]):
+        return False
+    return True
+
+
 def _run_units_pipeline(root: Path, graph, force: bool = False,
                         concurrency: int = 1) -> dict:
     """Phase 1 description-first units pipeline.
@@ -110,15 +137,16 @@ def _run_units_pipeline(root: Path, graph, force: bool = False,
         # Wave 4d: function_units that the impact pass already enriched
         # carry `description` directly on the unit dict. Bring them up
         # to spec (anchor + source_hash) without a second LLM call.
-        # Anything still missing falls through to the legacy
-        # `author_function_description` route below.
+        # `_impact_unit_reusable` gates this: anything missing, force-
+        # requested, or written in non-English (pre-Issue-2 impact.json)
+        # falls through to fresh `author_function_description`.
         existing_by_id = {u.get("id"): u for u in units if u.get("id")}
 
         reused_from_impact = 0
         still_stale: set[str] = set()
         for fn_id in stale_fn_ids:
             existing = existing_by_id.get(fn_id)
-            if not existing or not existing.get("description"):
+            if not _impact_unit_reusable(existing, force=force):
                 still_stale.add(fn_id)
                 continue
             fn = graph.functions.get(fn_id)
