@@ -299,14 +299,17 @@ def doctor(path: str):
         version_marker = f"winkers-snippet-version: {winkers.__version__}"
         if version_marker in content:
             ok(f"CLAUDE.md snippet up to date (v{winkers.__version__})")
-            # Check position: snippet should be in the first half
-            marker_pos = content.index("Architectural context (Winkers)")
-            if len(content) > 0 and marker_pos > len(content) // 2:
+            # Check position: snippet should be in the first half. The
+            # heading text changed across snippet versions ("Winkers —
+            # coding agent helper" → "Architectural context (Winkers)"),
+            # so anchor on the stable start-marker comment instead.
+            marker_pos = content.find("<!-- winkers-snippet-version:")
+            if marker_pos >= 0 and marker_pos > len(content) // 2:
                 warn(
                     "CLAUDE.md Winkers section is near the end"
                     " — run: winkers init to move it up"
                 )
-            else:
+            elif marker_pos >= 0:
                 ok("CLAUDE.md Winkers section positioned early")
         elif "winkers-snippet-version" in content:
             warn("CLAUDE.md snippet outdated — run: winkers init")
