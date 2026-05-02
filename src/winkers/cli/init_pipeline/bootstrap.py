@@ -60,24 +60,46 @@ def _templates_dir() -> Path:
 def _winkers_bin() -> str:
     """Resolve an absolute path to the winkers binary for hooks/MCP configs.
 
-    Priority: active venv → sys.argv[0] → PATH → bare name. The first three
-    yield an absolute path; the bare-name fallback is reserved for unusual
-    environments where neither sys.argv[0] nor PATH lookup work.
+    Priority: active venv → sys.argv[0] → sys.executable's bin → PATH →
+    bare name. The first four yield an absolute path; the bare-name
+    fallback is reserved for unusual environments where none of the
+    earlier paths work.
 
     Why absolute matters: hook commands and `.mcp.json:command` are run by
     Claude Code in subprocess contexts (systemd services, headless ticket
     runners) whose PATH often lacks the venv's bin/ — so a bare "winkers"
     silently fails. Confirmed in tespy's prod runner on 2026-04-26.
+
+    Why the basename check on sys.argv[0]: under pytest (and any other
+    script that imports winkers without being the winkers entry point),
+    sys.argv[0] points at the wrong absolute path (e.g.
+    `.../bin/pytest`). We only trust argv[0] when its basename actually
+    looks like the winkers entry script.
     """
     venv = os.environ.get("VIRTUAL_ENV")
     if venv:
-        for candidate in (Path(venv) / "bin" / "winkers", Path(venv) / "Scripts" / "winkers.exe"):
+        for candidate in (
+            Path(venv) / "bin" / "winkers",
+            Path(venv) / "Scripts" / "winkers.exe",
+        ):
             if candidate.exists():
                 return str(candidate)
     if sys.argv and sys.argv[0]:
         argv0 = Path(sys.argv[0])
-        if argv0.is_absolute() and argv0.exists():
+        if (
+            argv0.is_absolute()
+            and argv0.exists()
+            and argv0.stem.lower() == "winkers"
+        ):
             return str(argv0)
+    # sys.executable always points at the active interpreter; siblings
+    # of its directory are the install's console_scripts. Catches the
+    # case `python -m winkers ...` (sys.argv[0] = "winkers/__main__.py")
+    # and any test harness that doesn't activate VIRTUAL_ENV.
+    exe_dir = Path(sys.executable).parent
+    for candidate in (exe_dir / "winkers", exe_dir / "winkers.exe"):
+        if candidate.exists():
+            return str(candidate)
     via_path = shutil.which("winkers")
     if via_path:
         return via_path
