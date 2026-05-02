@@ -12,9 +12,11 @@ prompts hardcode:
 - Banned generic phrases
 - Structured JSON output with hardcoded_artifacts
 
-Prompts are written in English (universal for any codebase) but the LLM
-is instructed to match the input's primary language, so a Russian-comment
-project naturally yields Russian descriptions with domain terms preserved.
+Descriptions are ALWAYS authored in English so the embedding space stays
+monolingual. Domain-flavor for Russian-comment projects is preserved
+in two ways: identifiers/values are kept as-is in the source language,
+and incoming queries are pre-translated to English before semantic
+search (see `winkers.descriptions.translator` + the prompt_enrich hook).
 """
 
 from __future__ import annotations
@@ -29,30 +31,34 @@ _DESCRIPTION_RULES = dedent("""
     DESCRIPTION RULES:
 
     - 70-120 words, prose only — no markdown lists, headers, or code blocks.
-    - Open with an action verb in 3rd person ("Извлекает...", "Builds...",
-      "Renders...", "Solves...").
+    - Open with an action verb in 3rd person ("Builds...", "Renders...",
+      "Extracts...", "Solves...").
     - First sentence: WHAT — the observable effect, in domain terms.
     - Second sentence: WHEN — call site / trigger / invocation context. For
       entry points (HTTP routes, UI tabs) describe the trigger instead.
     - MUST include 2-3 DOMAIN PHRASES users would actually type when looking
       for this code. Not just identifiers from source — human concepts:
-        * "коллекторы пара" alongside `prod_merge` / `cond_merge`
-        * "доля регенерации" alongside `K_regen`
-        * "13 ата / 9 ата" alongside pressure constants
+        * "steam collectors" alongside `prod_merge` / `cond_merge`
+        * "regeneration share" alongside `K_regen`
+        * "13 / 9 atm pressure levels" alongside pressure constants
         * "monthly load curve" alongside `calc_monthly_loads`
       Without these, the embedding fails on domain-vocabulary queries.
     - End with ONE non-trivial detail — something that would silently break
       under a naive edit. Examples: "round() applies ONLY to indices 17..24",
       "renaming the id breaks JS without console error", "deepcopy fails on
       this config — use json.loads(json.dumps())".
-    - Match the language used in the input (docstrings/comments). Russian
-      input → Russian output. English input → English output. Mixed input →
-      mixed naturally — keep domain terms as-is.
+    - Author the description in ENGLISH, regardless of the language used in
+      source-code docstrings/comments. Keep code identifiers, file paths,
+      and load-bearing domain values (e.g. "K_regen", "коллекторы пара",
+      "tab_scheme.js") VERBATIM in their source language — only the
+      surrounding prose is English. Incoming search queries are translated
+      to English before lookup, so a uniformly-English embedding space
+      gives more reliable retrieval than per-project language drift.
 
     BANNED phrases:
-    - "this function" / "эта функция"
-    - "auxiliary" / "helper" / "вспомогательная" (without specifics)
-    - "used in various places" / "используется в разных местах"
+    - "this function"
+    - "auxiliary" / "helper" (without specifics)
+    - "used in various places"
     - "handles X" without saying HOW
 """).strip()
 

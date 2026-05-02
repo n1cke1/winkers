@@ -414,7 +414,12 @@ def _install_interactive_hooks(hooks: dict, hook_bin: str, root: Path) -> bool:
             "event": "UserPromptSubmit",
             "marker": "prompt-enrich",
             "command": f"{hook_bin} hook prompt-enrich {root_posix}",
-            "timeout": 2,
+            # 30s budget: pending audit + before_create matches finish in
+            # well under 1s; the synchronous Cyrillic→English translation
+            # via `claude --print` (subscription) takes 4-10s cold. We pay
+            # this once per non-English user prompt, before the main
+            # inference call, so the agent never stalls mid-session.
+            "timeout": 30,
             "matcher": "",
             "label": "prompt-enrich",
         },

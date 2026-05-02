@@ -4,6 +4,13 @@ Phase 3 extension: also reads `.winkers_pending.md` (audit TODO list
 left by the previous SessionEnd) and prepends it to the agent's
 context. Pending file is archived after consumption so each TODO
 list is shown exactly once.
+
+Phase 4 (Issue 2 from I9): for non-English prompts, runs a synchronous
+`claude --print` translation BEFORE the main inference call so the
+agent can pass the English form to `orient(task=...)` without an
+in-session subprocess stall. Descriptions are authored in English
+only — translating queries up-front keeps the embedding space
+monolingual without sacrificing UX for Russian/multilingual users.
 """
 
 from __future__ import annotations
@@ -119,6 +126,31 @@ def run(root: Path) -> None:
                 + pending_text
             )
             rec["pending_injected"] = True
+
+        # ── 1c. Pre-translate non-English prompts to English ───────────────
+        # Embeddings are English-only; translating up-front (here, BEFORE
+        # the main inference call) means the agent can use the English
+        # phrasing for orient(task=…) / before_create(intent=…) without
+        # a mid-session subprocess stall. Cyrillic is the trigger today;
+        # other scripts could be added without changing the contract.
+        if user_prompt:
+            from winkers.descriptions.translator import (
+                has_cyrillic,
+                translate_to_english,
+            )
+            if has_cyrillic(user_prompt):
+                rec["needs_translation"] = True
+                translation = translate_to_english(user_prompt, root)
+                if translation and translation.strip() != user_prompt.strip():
+                    sections.append(
+                        "[Winkers] Task translated to English for semantic "
+                        "search. Pass this English phrasing to "
+                        "`orient(task=...)` / `before_create(intent=...)` "
+                        "(or stay close to it) so retrieval hits the "
+                        "English-only embedding space:\n"
+                        f"  {translation}"
+                    )
+                    rec["translation_emitted"] = True
 
         # ── 2. before_create on creation intent (existing behaviour) ────────
         if user_prompt and has_creation_intent(user_prompt):
