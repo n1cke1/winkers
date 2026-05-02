@@ -30,6 +30,25 @@ from textwrap import dedent
 _DESCRIPTION_RULES = dedent("""
     DESCRIPTION RULES:
 
+    - **LANGUAGE — MANDATORY:** Author the description prose in
+      ENGLISH. This rule is non-negotiable and applies regardless of
+      the language of any docstrings, comments, identifiers, or string
+      literals in the source code. A Russian-comment file MUST still
+      yield an English description. Quoted domain phrases and code
+      identifiers (function names, constants, file paths) stay
+      verbatim in their source language — they appear inside English
+      sentences. Examples of correct mixed output:
+        * "Builds the steam-collector layout (коллекторы пара)
+           consumed by `prod_merge` / `cond_merge`."
+        * "Returns the JSON catalogue of TESPy formulas, replacing
+           the static `optimizer_balance` row..."
+        * "Calibrates the linear CHP model around `LinearCoeffs`;
+           search terms: «калибровка ТЭЦ», «steam turbine
+           calibration»."
+      Incoming search queries are pre-translated to English, so a
+      uniformly-English embedding space is required for reliable
+      retrieval. Russian-language descriptions are a CONTRACT
+      VIOLATION, even when the source is fully Russian.
     - 70-120 words, prose only — no markdown lists, headers, or code blocks.
     - Open with an action verb in 3rd person ("Builds...", "Renders...",
       "Extracts...", "Solves...").
@@ -47,13 +66,6 @@ _DESCRIPTION_RULES = dedent("""
       under a naive edit. Examples: "round() applies ONLY to indices 17..24",
       "renaming the id breaks JS without console error", "deepcopy fails on
       this config — use json.loads(json.dumps())".
-    - Author the description in ENGLISH, regardless of the language used in
-      source-code docstrings/comments. Keep code identifiers, file paths,
-      and load-bearing domain values (e.g. "K_regen", "коллекторы пара",
-      "tab_scheme.js") VERBATIM in their source language — only the
-      surrounding prose is English. Incoming search queries are translated
-      to English before lookup, so a uniformly-English embedding space
-      gives more reliable retrieval than per-project language drift.
 
     BANNED phrases:
     - "this function"
