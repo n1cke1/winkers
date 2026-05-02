@@ -233,15 +233,22 @@ def proposed_to_unit(coupling: ProposedCoupling) -> dict:
         display_value = display_value[:37] + "..."
 
     files_summary = ", ".join(sorted({h.file for h in coupling.hits})[:4])
+    # Description is in English to match the rest of the units index
+    # (Issue 2 — monolingual EN embedding space). Russian-language
+    # queries reach this unit through the pre-session prompt
+    # translation in `descriptions/translator`, not through bilingual
+    # description text.
     description = (
-        f"Связка по значению {coupling.canonical_value!r} "
-        f"({coupling.primary_kind}): встречается в {coupling.hit_count} "
-        f"единицах в {coupling.file_count} файлах ({files_summary}). При "
-        f"изменении канонического источника требуется синхронная правка "
-        f"всех потребителей. Это «cross-file coupling», «связка hardcoded "
-        f"value», «cross-cutting constraint». Обнаружено агрегатором из "
-        f"hardcoded_artifacts описаний — контексты в потребителях могут "
-        f"различаться, проверь смысл прежде чем синхронизировать."
+        f"Cross-file coupling on the {coupling.primary_kind} value "
+        f"{coupling.canonical_value!r}: appears in {coupling.hit_count} "
+        f"unit(s) across {coupling.file_count} file(s) ({files_summary}). "
+        "Changing the canonical source requires a synchronous edit at "
+        "every consumer site. Search terms: \"cross-file coupling\", "
+        "\"hardcoded value coupling\", \"cross-cutting constraint\". "
+        "Auto-detected by the aggregator from `hardcoded_artifacts` "
+        "extracted from unit descriptions — consumer contexts may "
+        "diverge from the canonical meaning, so verify intent before "
+        "syncing each call site."
     )
 
     consumers = []
