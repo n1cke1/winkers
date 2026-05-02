@@ -113,6 +113,71 @@ class TestPromptEnrichHook:
             assert "Winkers" in ctx
             assert "existing" in ctx.lower() or "implementations" in ctx.lower()
 
+    def test_cyrillic_prompt_emits_translation_section(self, graph, tmp_path):
+        """Russian prompt → translator runs, English form injected as context."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "cwd": str(tmp_path),
+            "hook_event_name": "UserPromptSubmit",
+            "user_prompt": "упростить статусы инвойсов с 6 до 3",
+        })
+
+        from winkers.hooks.prompt_enrich import run
+        captured_output = []
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit") as mock_exit, \
+             patch(
+                 "winkers.descriptions.translator._run_translate",
+                 return_value="simplify invoice statuses from 6 to 3",
+             ), \
+             patch(
+                 "builtins.print",
+                 side_effect=lambda x: captured_output.append(x),
+             ):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+            mock_exit.assert_called_with(0)
+
+        assert captured_output, "expected the hook to emit additionalContext"
+        result = json.loads(captured_output[0])
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "translated to English" in ctx
+        assert "simplify invoice statuses from 6 to 3" in ctx
+
+    def test_english_prompt_no_translation_section(self, graph, tmp_path):
+        """Pure-English prompt → translator skipped, no translation block."""
+        (tmp_path / ".winkers").mkdir()
+        GraphStore(tmp_path).save(graph)
+
+        hook_input = json.dumps({
+            "session_id": "test",
+            "cwd": str(tmp_path),
+            "hook_event_name": "UserPromptSubmit",
+            "user_prompt": "explain the calculate_price function",
+        })
+
+        from winkers.hooks.prompt_enrich import run
+        captured_output = []
+        # _run_translate must NEVER be called for English input.
+        with patch("sys.stdin") as mock_stdin, \
+             patch("sys.exit"), \
+             patch(
+                 "winkers.descriptions.translator._run_translate",
+             ) as mock_run, \
+             patch(
+                 "builtins.print",
+                 side_effect=lambda x: captured_output.append(x),
+             ):
+            mock_stdin.read.return_value = hook_input
+            run(tmp_path)
+        mock_run.assert_not_called()
+        # No output is fine — explain prompts emit no sections.
+        for raw in captured_output:
+            assert "translated to English" not in raw
+
 
 # ---------------------------------------------------------------------------
 # post_write — file update hook

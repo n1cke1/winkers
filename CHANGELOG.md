@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.9.1 — English-only embeddings, pre-session translation
+
+### Embeddings — monolingual English
+
+Per-unit descriptions are now authored in English regardless of source
+language (closes Issue 2 from `ISSUES_run_I9_observations.md`). The
+prior "match the language of the input" rule produced mixed-language
+embeddings on multilingual repos — a single Russian description in an
+otherwise English index added retrieval noise. English-only authoring
+keeps the BGE-M3 vector space uniform.
+
+Domain flavor is preserved by keeping code identifiers, file paths,
+and load-bearing domain values (e.g. `K_regen`, `коллекторы пара`,
+`tab_scheme.js`) **verbatim** in the source language. Only the
+surrounding prose is English.
+
+**Migration:** existing `.winkers/units.json` keeps any prior-language
+descriptions until you regenerate. To rebuild English-only:
+
+```bash
+winkers init --with-units --force-units
+```
+
+### Pre-session prompt translation
+
+To keep multilingual UX with monolingual embeddings, the
+`UserPromptSubmit` hook (`prompt_enrich`) now detects Cyrillic in the
+incoming user prompt and translates it to English **before** the main
+inference call via `claude --print` (subscription, $0). The English
+phrasing is injected as `additionalContext`:
+
+> [Winkers] Task translated to English for semantic search. Pass this
+> English phrasing to `orient(task=...)` / `before_create(intent=...)`…
+
+Effect: the agent sees both the original prompt and a clean English
+form. When it calls `orient`/`before_create`, it can pass the English
+form directly — no in-session subprocess stall, no cross-lingual
+BGE-M3 quality penalty.
+
+The translation is cached project-wide at
+`.winkers/translation_cache.json` (sha256-keyed) and persists across
+sessions. Set `WINKERS_NO_TRANSLATE=1` to disable. Pure-English
+prompts skip the subprocess entirely.
+
+The hook timeout for `prompt-enrich` is bumped from 2s → 30s in the
+installer (`cli/init_pipeline/install.py`) to accommodate the cold
+`claude --print` call (~4-10s typical). Existing installs are
+auto-updated on the next `winkers init`.
+
+### Files added / changed
+
+- `src/winkers/descriptions/translator.py` (new) — `translate_to_english`
+  + `has_cyrillic` + project-level cache.
+- `src/winkers/descriptions/prompts.py` — `_DESCRIPTION_RULES` now
+  locks English authoring and instructs the LLM to keep source-language
+  identifiers/values verbatim.
+- `src/winkers/hooks/prompt_enrich.py` — synchronous translation
+  injection step, runs before the existing creation-intent block.
+- `src/winkers/cli/init_pipeline/install.py` — `prompt-enrich` hook
+  timeout 2 → 30 to cover the `claude --print` translation call.
+- `tests/test_translator.py` (new) — 15 tests covering Cyrillic
+  detection, cache hit/miss, env-var bypass, transport-failure paths.
+- `tests/test_hooks.py` — two new prompt_enrich tests for the Cyrillic
+  injection path and the English-no-op path.
+
 ## 0.9.0 — surface cleanup
 
 ### Breaking — MCP tools
