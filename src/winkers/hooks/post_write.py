@@ -205,37 +205,7 @@ def run(root: Path) -> None:
                 sync = ", ".join(rule["sync_with"])
                 lines.append(f"  COHERENCE: Rule #{rule['id']} \"{rule['title']}\" — check {sync}")
 
-        for vc in value_changes:
-            if not vc["removed"]:
-                continue
-            literal_hits = vc.get("string_literal_hits") or {}
-            literal_total = literal_hits.get("total", 0)
-            literal_files = len(literal_hits.get("files", []))
-            lines.append(
-                f"  VALUE_LOCKED: {vc['name']} removed {vc['removed']} — "
-                f"{vc['affected_literal_uses']} call-site literal use(s)"
-                " in same-file consumers"
-            )
-            if literal_total:
-                lines.append(
-                    f"    + {literal_total} string-literal occurrence(s)"
-                    f" in {literal_files} file(s) repo-wide:"
-                )
-                # Show top-3 hits across all values for a quick sanity
-                # check; full list is in vc["string_literal_hits"].
-                shown = 0
-                by_value = literal_hits.get("by_value", {})
-                for value, items in by_value.items():
-                    for item in items:
-                        if shown >= 3:
-                            break
-                        lines.append(
-                            f"      {item['file']}:{item['line']}"
-                            f"  {value!r} → {item['snippet']}"
-                        )
-                        shown += 1
-                    if shown >= 3:
-                        break
+        lines.extend(_render_value_locked_lines(value_changes))
 
         pending = session.pending_warnings()
         if pending:
@@ -254,6 +224,62 @@ def run(root: Path) -> None:
             print(json.dumps(output))
 
         sys.exit(0)
+
+
+def _render_value_locked_lines(value_changes: list[dict]) -> list[str]:
+    """Render value_locked diff entries into agent-facing context lines.
+
+    Lead-line policy: when Path 2's repo-wide string-literal scan
+    reports any hits, those lead the line. The historical call-graph
+    metric ("N call-site literal use(s) in same-file consumers") was
+    structurally blind to bare comparisons, fixtures, SQL, and
+    template literals — agents anchored on its leading "0 …" and
+    treated dangerous removals as safe (I5 trap). Only when no Path 2
+    hits exist (non-Python projects, language without an expression-
+    uses index) does the call-graph count headline the warning.
+
+    Extracted from `run()` to make the formatting independently
+    testable without spinning up graph + session-store fixtures.
+    """
+    lines: list[str] = []
+    for vc in value_changes:
+        if not vc.get("removed"):
+            continue
+        literal_hits = vc.get("string_literal_hits") or {}
+        literal_total = literal_hits.get("total", 0)
+        literal_files = len(literal_hits.get("files", []))
+        call_site_uses = vc.get("affected_literal_uses", 0)
+        if literal_total:
+            lines.append(
+                f"  VALUE_LOCKED: {vc['name']} removed {vc['removed']}"
+                f" — ⚠ {literal_total} string-literal occurrence(s)"
+                f" in {literal_files} file(s) repo-wide:"
+            )
+            shown = 0
+            by_value = literal_hits.get("by_value", {})
+            for value, items in by_value.items():
+                for item in items:
+                    if shown >= 3:
+                        break
+                    lines.append(
+                        f"      {item['file']}:{item['line']}"
+                        f"  {value!r} → {item['snippet']}"
+                    )
+                    shown += 1
+                if shown >= 3:
+                    break
+            if call_site_uses:
+                lines.append(
+                    f"    (call-graph: also {call_site_uses} same-file"
+                    " consumer call-site(s) at risk)"
+                )
+        else:
+            lines.append(
+                f"  VALUE_LOCKED: {vc['name']} removed {vc['removed']}"
+                f" — {call_site_uses} call-site literal use(s)"
+                " in same-file consumers"
+            )
+    return lines
 
 
 _CODE_EXTENSIONS = frozenset({

@@ -123,19 +123,41 @@ def _tool_impact_check(
             fix_approach=rule.get("fix_approach", "sync"),
         ))
 
-    # Add warnings for value-domain shrinkage
+    # Add warnings for value-domain shrinkage. Severity escalates if
+    # EITHER the call-graph count OR Path 2's repo-wide string-literal
+    # scan finds risk — the call-graph is structurally blind to bare
+    # comparisons, SQL/template literals, and fixtures (I5 trap), so
+    # leaving the gate at "call-graph only" silently downgraded warnings
+    # to `warning` even when the AST scan reported dozens of consumers.
+    # post_write.py (lines 147-151) already uses this combined gate;
+    # the MCP-tool path needs the same fix.
     for vc in value_changes:
         if not vc["removed"]:
             continue
+        literal_hits = vc.get("string_literal_hits") or {}
+        literal_total = literal_hits.get("total", 0)
+        literal_files = len(literal_hits.get("files", []))
+        severity = (
+            "error"
+            if vc["affected_literal_uses"] > 0 or literal_total > 0
+            else "warning"
+        )
+        detail = (
+            f"{vc['name']}: removed {vc['removed']!r}; "
+            f"{vc['affected_literal_uses']} caller literal use(s) at risk "
+            f"in {len(vc['files_at_risk'])} file(s)"
+        )
+        if literal_total:
+            detail += (
+                f"; {literal_total} string-literal occurrence(s) "
+                f"in {literal_files} file(s) repo-wide"
+            )
+        detail += "."
         session.add_warning(Warning(
             kind="value_locked",
-            severity="error" if vc["affected_literal_uses"] > 0 else "warning",
+            severity=severity,
             target=f"{vc['file']}::{vc['name']}",
-            detail=(
-                f"{vc['name']}: removed {vc['removed']!r}; "
-                f"{vc['affected_literal_uses']} caller literal use(s) at risk "
-                f"in {len(vc['files_at_risk'])} file(s)."
-            ),
+            detail=detail,
         ))
 
     session_store.save(session)
