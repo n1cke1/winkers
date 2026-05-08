@@ -35,6 +35,32 @@
   .badge-locked { background: #7f1d1d; color: #fca5a5; }
   .badge-free { background: #14532d; color: #86efac; }
   .badge-async { background: #1e3a5f; color: #93c5fd; }
+  .badge-sec { background: #312e81; color: #c4b5fd; }
+  .route-method { font-family: monospace; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
+  .route-method.m-get { background: #14532d; color: #86efac; }
+  .route-method.m-post { background: #1e3a5f; color: #93c5fd; }
+  .route-method.m-put { background: #422006; color: #facc15; }
+  .route-method.m-patch { background: #422006; color: #facc15; }
+  .route-method.m-delete { background: #7f1d1d; color: #fca5a5; }
+  .risk-pill { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .risk-pill.r-low { background: #14532d; color: #86efac; }
+  .risk-pill.r-medium { background: #422006; color: #fde68a; }
+  .risk-pill.r-high { background: #7c2d12; color: #fdba74; }
+  .risk-pill.r-critical { background: #7f1d1d; color: #fca5a5; }
+  .desc-text { font-size: 12px; color: #cbd5e1; line-height: 1.55; white-space: pre-wrap; }
+
+  /* Routes tab */
+  #routes-page { flex: 1; overflow-y: auto; padding: 20px; }
+  .route-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+  .route-card:hover { border-color: #4a5180; }
+  .route-card .rt-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .route-card .rt-path { font-family: monospace; font-size: 13px; color: #e2e8f0; font-weight: 600; }
+  .route-card .rt-handler { font-family: monospace; font-size: 12px; color: #a78bfa; cursor: pointer; }
+  .route-card .rt-handler:hover { color: #c4b5fd; text-decoration: underline; }
+  .route-card .rt-file { font-size: 11px; color: #64748b; }
+  .route-card .rt-desc { font-size: 12px; color: #94a3b8; margin-top: 6px; line-height: 1.5; }
+  .route-card .rt-tpl { font-size: 11px; color: #64748b; margin-top: 6px; }
+  .route-card .rt-tpl .tpl-name { color: #7dd3fc; font-family: monospace; }
   .param-list { font-size: 12px; color: #94a3b8; font-family: monospace; }
   .caller-item { font-size: 12px; color: #a78bfa; cursor: pointer; padding: 3px 0; border-bottom: 1px solid #1a1d27; }
   .caller-item:hover { color: #c4b5fd; }
@@ -241,7 +267,7 @@
 <header>
   <h1>⬡ Winkers</h1>
   <div id="toolbar">
-    <input id="search" type="text" placeholder="Search functions…">
+    <input id="search" type="text" placeholder="Search functions, descriptions, routes…">
     <select id="zone-filter"><option value="">All zones</option></select>
     <select id="layout-select">
       <option value="dagre">Dagre (flow)</option>
@@ -253,6 +279,7 @@
     <button id="fit-btn">Fit</button>
     <button id="preview-btn">Preview</button>
     <button id="debt-btn">Tech Debt</button>
+    <button id="risk-btn">Risk</button>
     <button id="ui-btn">UI Map</button>
     <button id="history-btn">History</button>
     <select id="session-select"><option value="">Commit overlay</option></select>
@@ -262,6 +289,7 @@
 
 <div id="tab-bar">
   <div class="tab active" data-tab="graph-tab">Graph</div>
+  <div class="tab" data-tab="routes-tab">Routes</div>
   <div class="tab" data-tab="rules-tab">Rules</div>
   <div class="tab" data-tab="conventions-tab">Conventions</div>
   <div class="tab" data-tab="learning-tab">Agent Learning</div>
@@ -279,6 +307,18 @@
       <div class="fn-name" id="fn-name">—</div>
       <div class="fn-file" id="fn-file"></div>
       <div style="margin-top:6px" id="fn-badges"></div>
+    </div>
+    <div class="card" id="card-route" style="display:none">
+      <h3>Route</h3>
+      <div id="fn-route"></div>
+    </div>
+    <div class="card" id="card-risk" style="display:none">
+      <h3>Risk</h3>
+      <div id="fn-risk"></div>
+    </div>
+    <div class="card" id="card-desc" style="display:none">
+      <h3>Description</h3>
+      <div class="desc-text" id="fn-desc"></div>
     </div>
     <div class="card">
       <h3>Signature</h3>
@@ -305,6 +345,26 @@
   </div>
 </div>
 </div><!-- /graph-tab -->
+
+<div id="routes-tab" class="tab-content">
+  <div id="routes-page">
+    <div class="rules-header">
+      <h2>Routes <span id="routes-count" style="font-size:13px;color:#64748b;font-weight:400"></span></h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="routes-search" type="text" placeholder="Search route, handler, description…" style="padding:5px 10px;border-radius:6px;border:1px solid #2d3148;background:#0f1117;color:#e2e8f0;font-size:13px;width:300px">
+        <select id="routes-method-filter" style="font-size:12px;background:#1a1d27;border:1px solid #2d3148;color:#94a3b8;border-radius:6px;padding:5px 10px">
+          <option value="">All methods</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+          <option value="DELETE">DELETE</option>
+        </select>
+      </div>
+    </div>
+    <div id="routes-list"></div>
+  </div>
+</div><!-- /routes-tab -->
 
 <div id="learning-tab" class="tab-content">
   <div id="learning-page">
@@ -453,14 +513,23 @@ const ZONE_COLORS = [
 let cy = null;
 let graphData = null;
 let semanticData = null;
+let unitsData = null;
+let impactData = null;
 let zoneColorMap = {};
 let previewMode = false;
 let previewTarget = null;
 let debtMode = false;
 let debtData = null;
+let riskMode = false;
 let ctxTarget = null;
 
 let showUI = false;
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 async function loadGraph(zone = '') {
   let url = zone ? `/api/graph?zone=${encodeURIComponent(zone)}` : '/api/graph';
@@ -684,10 +753,51 @@ function showSidebar(data) {
     badges.appendChild(ab);
   }
 
+  // Route card
+  const routeCard = document.getElementById('card-route');
+  if (data.route) {
+    const m = (data.http_method || '').toLowerCase();
+    document.getElementById('fn-route').innerHTML =
+      `<span class="route-method m-${m}">${data.http_method || ''}</span><code style="color:#e2e8f0">${escapeHtml(data.route)}</code>`;
+    routeCard.style.display = '';
+  } else {
+    routeCard.style.display = 'none';
+  }
+
+  // Risk card
+  const riskCard = document.getElementById('card-risk');
+  if (data.risk_level) {
+    const summary = data.risk_summary ? `<div style="margin-top:6px;font-size:12px;color:#94a3b8;line-height:1.5">${escapeHtml(data.risk_summary)}</div>` : '';
+    document.getElementById('fn-risk').innerHTML =
+      `<span class="risk-pill r-${data.risk_level}">${data.risk_level}</span>${summary}`;
+    riskCard.style.display = '';
+  } else {
+    riskCard.style.display = 'none';
+  }
+
+  // Description card (LLM-authored unit description; falls back to intent)
+  const descCard = document.getElementById('card-desc');
+  const descText = data.description || data.intent;
+  if (descText) {
+    document.getElementById('fn-desc').textContent = descText;
+    descCard.style.display = '';
+  } else {
+    descCard.style.display = 'none';
+  }
+
   // Signature
   const params = (data.params || []).join(', ');
   const ret = data.return_type ? ` → ${data.return_type}` : '';
   document.getElementById('fn-sig').textContent = `(${params})${ret}`;
+
+  // Secondary intents → badges
+  const badgesEl = document.getElementById('fn-badges');
+  (data.secondary_intents || []).forEach(s => {
+    const b = document.createElement('span');
+    b.className = 'badge badge-sec';
+    b.textContent = s;
+    badgesEl.appendChild(b);
+  });
 
   // Docstring
   const docCard = document.getElementById('card-doc');
@@ -757,16 +867,51 @@ function hideSidebar() {
 function showTooltip(e) {
   const d = e.target.data();
   const tt = document.getElementById('tooltip');
+
+  // UI-layer nodes (templates/panels/forms/etc.) follow a different schema
+  if (d.layer === 'ui') {
+    let html = `<div class="tt-name">${escapeHtml(d.label)}</div>`;
+    html += `<div class="tt-file">${escapeHtml(d.kind)} · ${escapeHtml(d.template || '')}</div>`;
+    const tplDesc = unitsData?.traceability_units?.[d.template]?.description;
+    if (d.kind === 'template' && tplDesc) {
+      const t = tplDesc.length > 280 ? tplDesc.slice(0, 280) + '…' : tplDesc;
+      html += `<div class="tt-section">Template</div><div class="tt-val">${escapeHtml(t)}</div>`;
+    }
+    tt.innerHTML = html;
+    tt.style.display = 'block';
+    moveTooltip(e);
+    return;
+  }
+
   const zone = d.zone || 'root';
   const params = (d.params || []).join(', ');
   const ret = d.return_type ? ` -> ${d.return_type}` : '';
 
   let html = `<div class="tt-name">${d.label}</div>`;
   html += `<div class="tt-file">${d.file}:${d.line_start}-${d.line_end}</div>`;
+  if (d.route) {
+    html += `<div class="tt-section">Route</div>`;
+    html += `<div class="tt-val"><span class="route-method m-${(d.http_method||'').toLowerCase()}">${d.http_method || ''}</span> <code>${d.route}</code></div>`;
+  }
   html += `<div class="tt-sig">(${params})${ret}</div>`;
 
-  if (d.docstring) {
-    html += `<div class="tt-section">Docstring</div><div class="tt-val">${d.docstring}</div>`;
+  if (d.description) {
+    const desc = d.description.length > 280 ? d.description.slice(0, 280) + '…' : d.description;
+    html += `<div class="tt-section">Description</div><div class="tt-val">${escapeHtml(desc)}</div>`;
+  } else if (d.intent) {
+    html += `<div class="tt-section">Intent</div><div class="tt-val">${escapeHtml(d.intent)}</div>`;
+  } else if (d.docstring) {
+    html += `<div class="tt-section">Docstring</div><div class="tt-val">${escapeHtml(d.docstring)}</div>`;
+  }
+
+  if (d.risk_level) {
+    html += `<div class="tt-section">Risk</div>`;
+    html += `<div class="tt-val"><span class="risk-pill r-${d.risk_level}">${d.risk_level}</span>${d.risk_summary ? ' · ' + escapeHtml(d.risk_summary) : ''}</div>`;
+  }
+
+  if ((d.secondary_intents || []).length) {
+    html += `<div class="tt-section">Secondary intents</div>`;
+    html += `<div class="tt-val">${d.secondary_intents.map(s => `<span class="badge badge-sec">${escapeHtml(s)}</span>`).join(' ')}</div>`;
   }
 
   html += `<div class="tt-section">Stats</div>`;
@@ -826,12 +971,18 @@ function hideTooltip() {
   document.getElementById('tooltip').style.display = 'none';
 }
 
-// Search
+// Search — matches label, file, description, intent, route
 document.getElementById('search').oninput = function() {
-  const q = this.value.toLowerCase();
+  const q = this.value.toLowerCase().trim();
   if (!cy) return;
   cy.nodes().forEach(n => {
-    n.style('opacity', !q || n.data('label').toLowerCase().includes(q) ? 1 : 0.1);
+    if (!q) { n.style('opacity', 1); return; }
+    const d = n.data();
+    const haystack = [
+      d.label, d.file, d.description, d.intent, d.route, d.docstring,
+      ...(d.secondary_intents || []),
+    ].filter(Boolean).join(' ').toLowerCase();
+    n.style('opacity', haystack.includes(q) ? 1 : 0.1);
   });
 };
 
@@ -1066,6 +1217,55 @@ document.getElementById('debt-btn').onclick = async function() {
   debtMode = true;
 };
 
+document.getElementById('risk-btn').onclick = async function() {
+  if (riskMode) {
+    clearDebtLayer();
+    this.classList.remove('active');
+    riskMode = false;
+    return;
+  }
+  if (!impactData) {
+    try {
+      const res = await fetch('/api/impact');
+      impactData = res.ok ? await res.json() : { functions: {} };
+    } catch { impactData = { functions: {} }; }
+  }
+  const fns = impactData.functions || {};
+  if (!Object.keys(fns).length) {
+    toast('No impact data. Set ANTHROPIC_API_KEY and run winkers init.');
+    return;
+  }
+  applyRiskLayer(fns);
+  this.classList.add('active');
+  riskMode = true;
+};
+
+function applyRiskLayer(fns) {
+  if (!cy) return;
+  const colors = {
+    critical: { bg: '#7f1d1d', border: '#fca5a5' },
+    high:     { bg: '#b91c1c', border: '#fca5a5' },
+    medium:   { bg: '#d97706', border: '#fde68a' },
+    low:      { bg: '#15803d', border: '#86efac' },
+  };
+  let counts = { critical: 0, high: 0, medium: 0, low: 0, none: 0 };
+  cy.nodes().forEach(n => {
+    const id = n.data('id');
+    const r = fns[id];
+    if (r && colors[r.risk_level]) {
+      const c = colors[r.risk_level];
+      n.style({ 'background-color': c.bg, 'border-width': r.risk_level === 'critical' ? 4 : 3, 'border-color': c.border });
+      counts[r.risk_level] += 1;
+    } else {
+      n.style({ 'opacity': 0.25 });
+      counts.none += 1;
+    }
+  });
+  cy.edges().style({ 'opacity': 0.15 });
+  document.getElementById('stats-bar').textContent =
+    `RISK: critical ${counts.critical} · high ${counts.high} · medium ${counts.medium} · low ${counts.low} · unknown ${counts.none}`;
+}
+
 function applyDebtLayer(data) {
   if (!cy || !data.items) return;
   // Build lookup: target → worst severity
@@ -1106,6 +1306,10 @@ function clearDebtLayer() {
   cy.nodes().removeStyle();
   cy.edges().removeStyle();
   if (graphData) updateStats(graphData);
+  if (riskMode) {
+    riskMode = false;
+    document.getElementById('risk-btn').classList.remove('active');
+  }
 }
 
 // --- Tab switching ---
@@ -1119,6 +1323,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'rules-tab') loadRulesPage();
     if (tab.dataset.tab === 'conventions-tab') loadConventionsPage();
     if (tab.dataset.tab === 'debt-tab') loadDebtTab();
+    if (tab.dataset.tab === 'routes-tab') loadRoutesTab();
   });
 });
 
@@ -1499,6 +1704,120 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// --- Routes tab ---
+let routesData = null;     // [{id, name, file, line_start, route, http_method, description, template}]
+
+async function ensureUnits() {
+  if (unitsData !== null) return unitsData;
+  try {
+    const res = await fetch('/api/units');
+    unitsData = res.ok ? await res.json() : {};
+  } catch { unitsData = {}; }
+  return unitsData;
+}
+
+async function loadRoutesTab() {
+  if (!graphData) await loadGraph();
+  await ensureUnits();
+  // Pull ui_map (template per route) from semantic-style endpoint by re-fetching graph with ui=1
+  let uiMap = {};
+  try {
+    const r = await fetch('/api/graph?ui=1');
+    if (r.ok) {
+      const data = await r.json();
+      // Templates come in as nodes with layer='ui' and kind='template' linked from handler nodes via edge_kind='renders'
+      const tplNodes = {};
+      data.nodes.forEach(n => { if (n.data.layer === 'ui' && n.data.kind === 'template') tplNodes[n.data.id] = n.data.template; });
+      data.edges.forEach(e => {
+        if (e.data.edge_kind === 'renders') {
+          uiMap[e.data.source] = tplNodes[e.data.target];
+        }
+      });
+    }
+  } catch {}
+
+  routesData = (graphData?.nodes || [])
+    .filter(n => n.data.route)
+    .map(n => ({
+      id: n.data.id,
+      name: n.data.label,
+      file: n.data.file,
+      line_start: n.data.line_start,
+      line_end: n.data.line_end,
+      route: n.data.route,
+      http_method: n.data.http_method,
+      description: n.data.description || n.data.intent || n.data.docstring || '',
+      template: uiMap[n.data.id] || null,
+      risk_level: n.data.risk_level,
+    }))
+    .sort((a, b) => a.route.localeCompare(b.route));
+
+  renderRoutesTab();
+}
+
+function renderRoutesTab() {
+  const list = document.getElementById('routes-list');
+  const q = (document.getElementById('routes-search').value || '').toLowerCase();
+  const m = document.getElementById('routes-method-filter').value;
+  const filtered = routesData.filter(r => {
+    if (m && r.http_method !== m) return false;
+    if (!q) return true;
+    return r.route.toLowerCase().includes(q)
+        || r.name.toLowerCase().includes(q)
+        || (r.description || '').toLowerCase().includes(q)
+        || (r.template || '').toLowerCase().includes(q);
+  });
+  document.getElementById('routes-count').textContent = `${filtered.length}/${routesData.length}`;
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state">No routes match. Routes appear once <code>winkers init</code> has parsed your HTTP handlers.</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(r => {
+    const method = (r.http_method || '').toLowerCase();
+    const risk = r.risk_level ? `<span class="risk-pill r-${r.risk_level}" style="margin-left:4px">${r.risk_level}</span>` : '';
+    const desc = r.description ? `<div class="rt-desc">${escapeHtml(r.description)}</div>` : '';
+    const tpl = r.template ? `<div class="rt-tpl">→ renders <span class="tpl-name">${escapeHtml(r.template)}</span></div>` : '';
+    return `
+      <div class="route-card">
+        <div class="rt-head">
+          <span class="route-method m-${method}">${escapeHtml(r.http_method || '')}</span>
+          <span class="rt-path">${escapeHtml(r.route)}</span>
+          <span class="rt-handler" data-fn="${escapeHtml(r.id)}">${escapeHtml(r.name)}</span>
+          <span class="rt-file">${escapeHtml(r.file)}:${r.line_start}</span>
+          ${risk}
+        </div>
+        ${desc}
+        ${tpl}
+      </div>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.rt-handler').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.fn;
+      // Switch to graph tab and focus the node
+      document.querySelector('.tab[data-tab="graph-tab"]').click();
+      setTimeout(() => {
+        if (!cy) return;
+        const n = cy.getElementById(id);
+        if (n.length) {
+          cy.animate({ fit: { eles: n, padding: 60 } });
+          cy.elements().unselect();
+          n.select();
+          showSidebar(n.data());
+        }
+      }, 100);
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const s = document.getElementById('routes-search');
+  const m = document.getElementById('routes-method-filter');
+  if (s) s.addEventListener('input', () => routesData && renderRoutesTab());
+  if (m) m.addEventListener('change', () => routesData && renderRoutesTab());
+});
+
 // --- Tech Debt tab ---
 let debtRawData = null;
 
@@ -1683,6 +2002,7 @@ document.getElementById('debt-sev-filter').addEventListener('change', renderDebt
 // Init
 loadGraph();
 loadSemantic();
+ensureUnits();
 loadSessions();
 connectWS();
 </script>

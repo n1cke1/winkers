@@ -20,6 +20,60 @@ def make_handlers(root: Path, store: GraphStore) -> SimpleNamespace:
             return web.json_response({})
         return web.json_response(sem.model_dump())
 
+    async def handle_units(request: web.Request) -> web.Response:
+        """Per-unit LLM descriptions (function/class/attribute/value/traceability)."""
+        units_path = root / ".winkers" / "units.json"
+        if not units_path.exists():
+            return web.json_response({
+                "function_units": {},
+                "class_units": {},
+                "attribute_units": {},
+                "value_units": {},
+                "traceability_units": {},
+            })
+        try:
+            data = json.loads(units_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+        units = data.get("units", [])
+        function_units: dict[str, dict] = {}
+        class_units: dict[str, dict] = {}
+        attribute_units: dict[str, dict] = {}
+        value_units: dict[str, dict] = {}
+        traceability_units: dict[str, dict] = {}
+
+        for u in units:
+            anchor = u.get("anchor") or {}
+            kind = u.get("kind", "")
+            entry = {
+                "name": u.get("name"),
+                "description": u.get("description"),
+                "hardcoded_artifacts": u.get("hardcoded_artifacts") or [],
+                "anchor": anchor,
+            }
+            if kind == "function_unit" and anchor.get("file") and anchor.get("fn"):
+                function_units[f"{anchor['file']}::{anchor['fn']}"] = entry
+            elif kind == "class_unit" and anchor.get("file") and anchor.get("cls"):
+                class_units[f"{anchor['file']}::{anchor['cls']}"] = entry
+            elif kind == "attribute_unit":
+                key = f"{anchor.get('file', '')}::{anchor.get('cls', '')}.{anchor.get('attr', '')}"
+                attribute_units[key] = entry
+            elif kind == "value_unit":
+                key = f"{anchor.get('file', '')}::{anchor.get('value', '')}"
+                value_units[key] = entry
+            elif kind == "traceability_unit":
+                key = anchor.get("template") or anchor.get("file") or u.get("name", "")
+                traceability_units[key] = entry
+
+        return web.json_response({
+            "function_units": function_units,
+            "class_units": class_units,
+            "attribute_units": attribute_units,
+            "value_units": value_units,
+            "traceability_units": traceability_units,
+        })
+
     async def handle_history(request: web.Request) -> web.Response:
         return web.json_response(_history(root))
 
@@ -74,6 +128,7 @@ def make_handlers(root: Path, store: GraphStore) -> SimpleNamespace:
 
     return SimpleNamespace(
         semantic=handle_semantic,
+        units=handle_units,
         history=handle_history,
         debt=handle_debt,
         impact=handle_impact,

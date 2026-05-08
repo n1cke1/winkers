@@ -26,7 +26,8 @@ def make_handlers(root: Path, store: GraphStore, static_dir: Path) -> SimpleName
             return web.json_response({"error": "Graph not initialized"}, status=404)
         zone = request.rel_url.query.get("zone")
         include_ui = request.rel_url.query.get("ui") == "1"
-        return web.json_response(_graph_to_cytoscape(graph, zone, include_ui))
+        sidecar = _load_sidecar(root)
+        return web.json_response(_graph_to_cytoscape(graph, zone, include_ui, sidecar))
 
     async def handle_preview(request: web.Request) -> web.Response:
         graph = store.load()
@@ -52,7 +53,9 @@ def make_handlers(root: Path, store: GraphStore, static_dir: Path) -> SimpleName
             snap_graph = Graph.model_validate(data)
             zone = request.rel_url.query.get("zone")
             include_ui = request.rel_url.query.get("ui") == "1"
-            return web.json_response(_graph_to_cytoscape(snap_graph, zone, include_ui))
+            return web.json_response(
+                _graph_to_cytoscape(snap_graph, zone, include_ui, _load_sidecar(root)),
+            )
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
@@ -64,14 +67,51 @@ def make_handlers(root: Path, store: GraphStore, static_dir: Path) -> SimpleName
     )
 
 
+def _load_sidecar(root: Path) -> dict[str, dict]:
+    """Load auxiliary data joined onto graph nodes: units descriptions + impact risk."""
+    units_path = root / ".winkers" / "units.json"
+    impact_path = root / ".winkers" / "impact.json"
+    descriptions: dict[str, str] = {}
+    if units_path.exists():
+        try:
+            data = json.loads(units_path.read_text(encoding="utf-8"))
+            for u in data.get("units", []):
+                if u.get("kind") != "function_unit":
+                    continue
+                anchor = u.get("anchor") or {}
+                if anchor.get("file") and anchor.get("fn") and u.get("description"):
+                    descriptions[f"{anchor['file']}::{anchor['fn']}"] = u["description"]
+        except Exception:
+            pass
+
+    risk: dict[str, dict] = {}
+    if impact_path.exists():
+        try:
+            data = json.loads(impact_path.read_text(encoding="utf-8"))
+            for fn_id, r in (data.get("functions") or {}).items():
+                risk[fn_id] = {
+                    "risk_level": r.get("risk_level"),
+                    "risk_score": r.get("risk_score"),
+                    "summary": r.get("summary"),
+                }
+        except Exception:
+            pass
+
+    return {"descriptions": descriptions, "risk": risk}
+
+
 def _graph_to_cytoscape(
     graph,
     zone_filter: str | None = None,
     include_ui: bool = False,
+    sidecar: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Convert Graph to Cytoscape.js elements format."""
     nodes = []
     edges = []
+    sidecar = sidecar or {"descriptions": {}, "risk": {}}
+    descriptions = sidecar.get("descriptions", {})
+    risk = sidecar.get("risk", {})
 
     fn_ids_in_zone: set[str] = set()
 
@@ -80,6 +120,7 @@ def _graph_to_cytoscape(
         if zone_filter and zone != zone_filter:
             continue
         fn_ids_in_zone.add(fn_id)
+        r = risk.get(fn_id) or {}
         nodes.append({
             "data": {
                 "id": fn_id,
@@ -96,6 +137,13 @@ def _graph_to_cytoscape(
                 "return_type": fn.return_type,
                 "is_async": fn.is_async,
                 "docstring": fn.docstring,
+                "intent": fn.intent,
+                "secondary_intents": fn.secondary_intents or [],
+                "route": fn.route,
+                "http_method": fn.http_method,
+                "description": descriptions.get(fn_id),
+                "risk_level": r.get("risk_level"),
+                "risk_summary": r.get("summary"),
             }
         })
 
