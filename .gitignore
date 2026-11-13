@@ -50,3 +50,6 @@ winkers_*.md
 # Dev / spike scratch — not part of the package
 scripts/
 ui_traceability.json
+
+# Benchmark secrets
+.wnk_env

@@ -1,0 +1,26 @@
+{
+  "config": "S-WNK",
+  "task_id": "I9",
+  "task_title": "Audit soft-delete consistency",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 263,
+  "tests_after_failed": 0,
+  "cost_usd": 2.2352724,
+  "num_turns": 67,
+  "duration_ms": 818183,
+  "session_id": "50444f03-64a0-458a-a07f-1adea9631941",
+  "total_tool_calls": 66,
+  "tool_stats": {
+    "ToolSearch": 5,
+    "mcp__winkers__orient": 1,
+    "mcp__winkers__browse": 3,
+    "Read": 23,
+    "Glob": 4,
+    "mcp__winkers__before_create": 5,
+    "TodoWrite": 6,
+    "Edit": 13,
+    "Write": 1,
+    "Bash": 5
+  }
+}

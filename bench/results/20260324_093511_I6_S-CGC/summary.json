@@ -1,0 +1,24 @@
+{
+  "config": "S-CGC",
+  "task_id": "I6",
+  "task_title": "TRAP: Consolidate domain/ files",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 232,
+  "tests_after_failed": 0,
+  "cost_usd": 0.7420861499999998,
+  "num_turns": 48,
+  "duration_ms": 181985,
+  "session_id": "03c417ef-198d-4764-9950-b100eccfed8d",
+  "total_tool_calls": 47,
+  "tool_stats": {
+    "Glob": 2,
+    "Read": 18,
+    "Grep": 1,
+    "ToolSearch": 1,
+    "TodoWrite": 7,
+    "Write": 1,
+    "Edit": 14,
+    "Bash": 3
+  }
+}

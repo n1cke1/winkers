@@ -1,0 +1,24 @@
+{
+  "config": "S-GFY",
+  "task_id": "I8",
+  "task_title": "Consolidate duplicate email validation",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 255,
+  "tests_after_failed": 0,
+  "cost_usd": 0.4529488500000001,
+  "num_turns": 25,
+  "duration_ms": 98901,
+  "session_id": "cf0157b0-8d70-4396-8071-f8e745207cc0",
+  "total_tool_calls": 24,
+  "tool_stats": {
+    "Read": 6,
+    "Grep": 1,
+    "Glob": 5,
+    "ToolSearch": 1,
+    "TodoWrite": 4,
+    "Write": 2,
+    "Edit": 4,
+    "Bash": 1
+  }
+}

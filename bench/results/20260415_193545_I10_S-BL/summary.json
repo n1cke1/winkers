@@ -1,0 +1,23 @@
+{
+  "config": "S-BL",
+  "task_id": "I10",
+  "task_title": "Optimistic locking for invoice updates",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 242,
+  "tests_after_failed": 0,
+  "cost_usd": 1.09919065,
+  "num_turns": 24,
+  "duration_ms": 367966,
+  "session_id": "ebe2a35e-0e9b-401d-a3aa-0bf23284f4f7",
+  "total_tool_calls": 75,
+  "tool_stats": {
+    "Agent": 4,
+    "ToolSearch": 3,
+    "Bash": 7,
+    "Read": 41,
+    "Glob": 4,
+    "Edit": 14,
+    "Write": 2
+  }
+}

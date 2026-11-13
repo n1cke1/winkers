@@ -1,0 +1,26 @@
+{
+  "config": "S-WNK",
+  "task_id": "I1",
+  "task_title": "Add late payment fees",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 266,
+  "tests_after_failed": 0,
+  "cost_usd": 1.0530666,
+  "num_turns": 42,
+  "duration_ms": 332402,
+  "session_id": "2b21d22b-fe8b-4106-8c59-78b814cebb58",
+  "total_tool_calls": 41,
+  "tool_stats": {
+    "mcp__winkers__orient": 3,
+    "ToolSearch": 2,
+    "Glob": 2,
+    "Read": 11,
+    "mcp__winkers__before_create": 2,
+    "TodoWrite": 9,
+    "Edit": 4,
+    "Write": 4,
+    "Bash": 3,
+    "mcp__winkers__session_done": 1
+  }
+}

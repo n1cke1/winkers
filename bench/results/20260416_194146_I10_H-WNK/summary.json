@@ -1,0 +1,25 @@
+{
+  "config": "H-WNK",
+  "task_id": "I10",
+  "task_title": "Optimistic locking for invoice updates",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 241,
+  "tests_after_failed": 0,
+  "cost_usd": 0.42806179999999994,
+  "num_turns": 56,
+  "duration_ms": 275242,
+  "session_id": "94e733a8-fc1e-4725-bf83-ce0952696c4a",
+  "total_tool_calls": 55,
+  "tool_stats": {
+    "mcp__winkers__orient": 2,
+    "mcp__winkers__browse": 1,
+    "Grep": 1,
+    "Read": 12,
+    "Glob": 9,
+    "Bash": 14,
+    "mcp__winkers__before_create": 4,
+    "Edit": 9,
+    "Write": 3
+  }
+}

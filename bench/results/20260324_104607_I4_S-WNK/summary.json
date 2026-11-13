@@ -1,0 +1,23 @@
+{
+  "config": "S-WNK",
+  "task_id": "I4",
+  "task_title": "TRAP: Optimize tax calculation",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 237,
+  "tests_after_failed": 0,
+  "cost_usd": 1.5646675500000002,
+  "num_turns": 33,
+  "duration_ms": 698718,
+  "session_id": "7f9e9730-ed90-4bf4-a319-eda71a3268e3",
+  "total_tool_calls": 54,
+  "tool_stats": {
+    "Agent": 1,
+    "Bash": 5,
+    "Glob": 1,
+    "Read": 29,
+    "ToolSearch": 1,
+    "TodoWrite": 6,
+    "Edit": 11
+  }
+}

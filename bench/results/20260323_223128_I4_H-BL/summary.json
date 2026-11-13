@@ -1,0 +1,25 @@
+{
+  "config": "H-BL",
+  "task_id": "I4",
+  "task_title": "TRAP: Optimize tax calculation",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 234,
+  "tests_after_failed": 0,
+  "cost_usd": 0.6316259500000001,
+  "num_turns": 40,
+  "duration_ms": 338053,
+  "session_id": "df89b472-f66a-4ae1-8c21-630a6f0a82c2",
+  "total_tool_calls": 81,
+  "tool_stats": {
+    "Bash": 18,
+    "Glob": 5,
+    "Read": 41,
+    "EnterPlanMode": 1,
+    "Agent": 2,
+    "Grep": 5,
+    "Write": 1,
+    "ExitPlanMode": 2,
+    "Edit": 6
+  }
+}

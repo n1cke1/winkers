@@ -1,0 +1,19 @@
+{
+  "config": "O-WNK",
+  "task_id": "I4",
+  "task_title": "TRAP: Optimize tax calculation",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 232,
+  "tests_after_failed": 0,
+  "cost_usd": 1.1940255,
+  "num_turns": 5,
+  "duration_ms": 67971,
+  "session_id": "6321553d-91a6-4ad6-964b-68d6a79166bd",
+  "total_tool_calls": 4,
+  "tool_stats": {
+    "ToolSearch": 1,
+    "mcp__winkers__orient": 1,
+    "Read": 2
+  }
+}

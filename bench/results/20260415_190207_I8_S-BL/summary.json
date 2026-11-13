@@ -1,0 +1,23 @@
+{
+  "config": "S-BL",
+  "task_id": "I8",
+  "task_title": "Consolidate duplicate email validation",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 256,
+  "tests_after_failed": 0,
+  "cost_usd": 0.4557125999999999,
+  "num_turns": 15,
+  "duration_ms": 174015,
+  "session_id": "14bdd476-2713-44a3-9136-584a04b1001c",
+  "total_tool_calls": 37,
+  "tool_stats": {
+    "Agent": 2,
+    "ToolSearch": 3,
+    "Bash": 8,
+    "Read": 18,
+    "Glob": 1,
+    "Edit": 4,
+    "Write": 1
+  }
+}

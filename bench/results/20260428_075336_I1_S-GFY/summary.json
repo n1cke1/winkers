@@ -1,0 +1,22 @@
+{
+  "config": "S-GFY",
+  "task_id": "I1",
+  "task_title": "Add late payment fees",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 254,
+  "tests_after_failed": 0,
+  "cost_usd": 0.7425361499999998,
+  "num_turns": 32,
+  "duration_ms": 241134,
+  "session_id": "ad8dc1ff-6a39-42a2-bdea-a7d7b3cdb4ef",
+  "total_tool_calls": 31,
+  "tool_stats": {
+    "ToolSearch": 2,
+    "Read": 13,
+    "Glob": 1,
+    "TodoWrite": 8,
+    "Write": 3,
+    "Edit": 4
+  }
+}

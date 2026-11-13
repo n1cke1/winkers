@@ -1,0 +1,23 @@
+{
+  "config": "S-GFY",
+  "task_id": "I7",
+  "task_title": "Extend audit logging coverage",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 244,
+  "tests_after_failed": 0,
+  "cost_usd": 1.9716208500000003,
+  "num_turns": 57,
+  "duration_ms": 586476,
+  "session_id": "d6064780-ece6-4a94-96da-b49380659bda",
+  "total_tool_calls": 56,
+  "tool_stats": {
+    "Read": 27,
+    "Glob": 3,
+    "ToolSearch": 1,
+    "TodoWrite": 9,
+    "Edit": 11,
+    "Write": 3,
+    "Bash": 2
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "config": "S-GFY",
+  "task_id": "I6",
+  "task_title": "TRAP: Consolidate domain/ files",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 316,
+  "tests_after_failed": 0,
+  "cost_usd": 0.8058507000000003,
+  "num_turns": 45,
+  "duration_ms": 178761,
+  "session_id": "2f5c76f6-3e58-400d-99a8-176902bb1f60",
+  "total_tool_calls": 44,
+  "tool_stats": {
+    "Read": 21,
+    "Glob": 2,
+    "Grep": 2,
+    "Write": 2,
+    "Edit": 15,
+    "Bash": 2
+  }
+}

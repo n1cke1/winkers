@@ -1,0 +1,73 @@
+max_turns: 50
+timeout_seconds: 1200
+
+base_tools:
+  - "Read"
+  - "Write"
+  - "Edit"
+  - "Grep"
+  - "Bash(python*)"
+  - "Bash(pytest*)"
+  - "Bash(git diff*)"
+  - "Bash(git status*)"
+  - "Bash(git log*)"
+  - "Bash(find*)"
+  - "Bash(cat*)"
+  - "Bash(ls*)"
+  - "Bash(head*)"
+  - "Bash(tail*)"
+
+prompt_template: |
+  Complete the following task in this project.
+
+  Task: {task_prompt}
+
+  Rules:
+  - Write clean, well-tested code
+  - Follow existing code style and patterns
+  - Add tests for new functionality
+  {prompt_addendum}
+
+models:
+  H:
+    id: claude-haiku-4-5
+    input_price_per_1m: 0.80
+    output_price_per_1m: 4.00
+  S:
+    id: claude-sonnet-4-6
+    input_price_per_1m: 3.00
+    output_price_per_1m: 15.00
+  O:
+    id: claude-opus-4-7
+    input_price_per_1m: 15.00
+    output_price_per_1m: 75.00
+
+adapters:
+  - BL
+  - CBM
+  - WNK
+  - GFY
+
+projects:
+  httpx:
+    source: projects/httpx
+    language: python
+    test_command: "python -m pytest tests/ -x -q"
+    tasks: [H1, H2, H3, H4, H5, H6]
+  invoicekit:
+    source: projects/invoicekit
+    language: python
+    test_command: "python -m pytest tests/ -x -q"
+    tasks: [I1, I2, I3, I4, I5, I6, I7, I8, I9, I10]
+
+matrix:
+  minimal:
+    models: [H, S]
+    adapters: [BL, CBM, WNK]
+    projects: [invoicekit]
+    task_categories: [standard]
+  full:
+    models: [H, S]
+    adapters: [BL, CBM, WNK]
+    projects: [httpx, invoicekit]
+    task_categories: [standard, trap]

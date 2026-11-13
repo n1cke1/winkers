@@ -1,0 +1,23 @@
+{
+  "config": "H-CBM",
+  "task_id": "I5",
+  "task_title": "TRAP: Simplify invoice statuses",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 188,
+  "tests_after_failed": 0,
+  "cost_usd": 0.43210655,
+  "num_turns": 41,
+  "duration_ms": 132153,
+  "session_id": "7bdcfb1c-2106-412e-bd96-56e7ce8790d0",
+  "total_tool_calls": 47,
+  "tool_stats": {
+    "mcp__codebase-memory-mcp__get_architecture": 1,
+    "mcp__codebase-memory-mcp__search_code": 1,
+    "Glob": 1,
+    "Read": 16,
+    "Grep": 2,
+    "Edit": 24,
+    "Bash": 2
+  }
+}

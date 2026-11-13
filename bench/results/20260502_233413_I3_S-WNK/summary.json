@@ -1,0 +1,27 @@
+{
+  "config": "S-WNK",
+  "task_id": "I3",
+  "task_title": "Add recurring invoices",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 246,
+  "tests_after_failed": 0,
+  "cost_usd": 1.4070436500000003,
+  "num_turns": 60,
+  "duration_ms": 371699,
+  "session_id": "c0594d5c-7c75-42de-9635-75427c856bd6",
+  "total_tool_calls": 59,
+  "tool_stats": {
+    "ToolSearch": 4,
+    "mcp__winkers__orient": 1,
+    "mcp__winkers__browse": 3,
+    "Read": 17,
+    "Glob": 2,
+    "TodoWrite": 6,
+    "mcp__winkers__before_create": 5,
+    "mcp__winkers__rule_read": 1,
+    "Edit": 14,
+    "Write": 3,
+    "Bash": 3
+  }
+}

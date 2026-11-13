@@ -1,0 +1,25 @@
+{
+  "config": "S-WNK",
+  "task_id": "I8",
+  "task_title": "Consolidate duplicate email validation",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 244,
+  "tests_after_failed": 0,
+  "cost_usd": 0.6211730999999999,
+  "num_turns": 37,
+  "duration_ms": 220185,
+  "session_id": "89659b82-650f-409b-a8ed-762c72205b5d",
+  "total_tool_calls": 36,
+  "tool_stats": {
+    "ToolSearch": 5,
+    "mcp__winkers__orient": 1,
+    "mcp__winkers__find_work_area": 1,
+    "Read": 11,
+    "Glob": 3,
+    "mcp__winkers__before_create": 2,
+    "TodoWrite": 6,
+    "Edit": 6,
+    "Write": 1
+  }
+}

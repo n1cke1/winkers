@@ -1,0 +1,24 @@
+{
+  "config": "S-CBM",
+  "task_id": "I6",
+  "task_title": "TRAP: Consolidate domain/ files",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 232,
+  "tests_after_failed": 0,
+  "cost_usd": 0.5791017,
+  "num_turns": 48,
+  "duration_ms": 193897,
+  "session_id": "fc09798f-5af3-4337-8ea5-85d5b1759ed4",
+  "total_tool_calls": 47,
+  "tool_stats": {
+    "Glob": 1,
+    "ToolSearch": 1,
+    "Read": 18,
+    "Grep": 1,
+    "TodoWrite": 8,
+    "Write": 1,
+    "Edit": 14,
+    "Bash": 3
+  }
+}

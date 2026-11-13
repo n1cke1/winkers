@@ -1,0 +1,36 @@
+name: invoicekit
+source: ../invoicekit
+language: python
+description: "B2B invoicing application (~100 files, layered architecture, complex business rules)"
+license: proprietary
+test_command: "python -m pytest tests/ -x -q"
+setup_commands:
+  - "pip install -e .[dev]"
+file_count: ~100
+function_count: ~270
+key_files:
+  - app/services/invoice.py
+  - app/services/payment.py
+  - app/domain/tax.py
+  - app/domain/discount.py
+  - app/domain/status.py
+  - app/models/invoice.py
+high_caller_functions:
+  - calculate_tax_for_line_item
+  - apply_line_discount
+  - apply_invoice_discount
+  - can_transition
+  - validate_transition
+  - is_editable
+  - is_overdue
+  - _recalculate_totals
+conventions:
+  - "All money as Decimal, NEVER float, ROUND_HALF_UP"
+  - "Tax calculated per line item, then summed (legal requirement)"
+  - "Compound tax: priority field determines order"
+  - "Invoice status is a state machine (draft→sent→viewed→partially_paid→paid→void)"
+  - "overdue is computed property, not stored status"
+  - "partially_paid cannot be voided"
+  - "domain/ is pure functions, no DB"
+  - "services: one method = one transaction"
+  - "repos: only place for SQL"

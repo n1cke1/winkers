@@ -1,0 +1,25 @@
+{
+  "config": "S-BL",
+  "task_id": "I5",
+  "task_title": "TRAP: Simplify invoice statuses",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 256,
+  "tests_after_failed": 0,
+  "cost_usd": 0.79595305,
+  "num_turns": 25,
+  "duration_ms": 230306,
+  "session_id": "da5d3aa1-f888-4d9d-b6bd-b22784dd0549",
+  "total_tool_calls": 46,
+  "tool_stats": {
+    "ToolSearch": 1,
+    "Agent": 1,
+    "Bash": 5,
+    "Glob": 1,
+    "Grep": 1,
+    "Read": 27,
+    "TodoWrite": 4,
+    "Edit": 5,
+    "Write": 1
+  }
+}

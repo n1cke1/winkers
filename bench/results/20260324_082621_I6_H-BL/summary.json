@@ -1,0 +1,23 @@
+{
+  "config": "H-BL",
+  "task_id": "I6",
+  "task_title": "TRAP: Consolidate domain/ files",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 232,
+  "tests_after_failed": 0,
+  "cost_usd": 0.38104045,
+  "num_turns": 55,
+  "duration_ms": 165775,
+  "session_id": "e0d1725f-ac94-4164-8248-56b5c2250c5b",
+  "total_tool_calls": 54,
+  "tool_stats": {
+    "Read": 22,
+    "Glob": 3,
+    "Grep": 2,
+    "Bash": 10,
+    "TodoWrite": 6,
+    "Write": 2,
+    "Edit": 9
+  }
+}

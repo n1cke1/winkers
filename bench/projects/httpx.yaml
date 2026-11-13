@@ -1,0 +1,21 @@
+name: httpx
+source: https://github.com/encode/httpx
+language: python
+description: "Python HTTP client library (~90 source files, ~400 functions)"
+license: BSD-3-Clause
+test_command: "python -m pytest tests/ -x -q"
+setup_commands:
+  - "pip install -e .[dev]"
+file_count: ~90
+function_count: ~400
+key_files:
+  - httpx/_client.py
+  - httpx/_transports/default.py
+  - httpx/_config.py
+  - httpx/_models.py
+high_caller_functions:
+  - handle_request
+  - _send_single_request
+  - Response
+  - Client
+  - AsyncClient

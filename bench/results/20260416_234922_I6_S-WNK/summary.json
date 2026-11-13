@@ -1,0 +1,27 @@
+{
+  "config": "S-WNK",
+  "task_id": "I6",
+  "task_title": "TRAP: Consolidate domain/ files",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 232,
+  "tests_after_failed": 0,
+  "cost_usd": 0.94437525,
+  "num_turns": 48,
+  "duration_ms": 227954,
+  "session_id": "b8bac271-e556-4be2-a1f1-027919b5d1bc",
+  "total_tool_calls": 47,
+  "tool_stats": {
+    "mcp__winkers__orient": 1,
+    "mcp__winkers__browse": 1,
+    "Read": 19,
+    "Glob": 1,
+    "Grep": 1,
+    "mcp__winkers__before_create": 1,
+    "ToolSearch": 1,
+    "TodoWrite": 7,
+    "Write": 2,
+    "Edit": 10,
+    "Bash": 3
+  }
+}

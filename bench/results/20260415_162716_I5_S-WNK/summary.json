@@ -1,0 +1,25 @@
+{
+  "config": "S-WNK",
+  "task_id": "I5",
+  "task_title": "TRAP: Simplify invoice statuses",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 230,
+  "tests_after_failed": 0,
+  "cost_usd": 1.6353197999999998,
+  "num_turns": 51,
+  "duration_ms": 417941,
+  "session_id": "14c3b360-cd72-4203-8118-4c62acdd1556",
+  "total_tool_calls": 58,
+  "tool_stats": {
+    "mcp__winkers__orient": 1,
+    "mcp__winkers__before_create": 1,
+    "Read": 15,
+    "Glob": 5,
+    "Grep": 4,
+    "ToolSearch": 1,
+    "TodoWrite": 10,
+    "Write": 2,
+    "Edit": 19
+  }
+}

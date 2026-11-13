@@ -5,6 +5,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/n1cke1/winkers/actions/workflows/ci.yml/badge.svg)](https://github.com/n1cke1/winkers/actions)
 
+> **Status: paused (May 2026).** We built a benchmark to check whether this
+> graph actually helps a coding agent. Over 229 headless Claude Code runs it
+> did not help a frontier model: Sonnet's pass rate was 69% with and without
+> Winkers, at 7% higher cost. It did help the weaker Haiku (73% vs 43%). Harness, per-run data and the write-up are in
+> [`bench/RESULTS.md`](bench/RESULTS.md). The code stays here as a reference.
+
 Winkers builds a function-level dependency graph via tree-sitter, enriches it
 with semantic context via Claude API, and serves both to AI agents via MCP.
 The agent gets project structure, constraints, and conventions before writing

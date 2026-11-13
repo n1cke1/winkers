@@ -1,0 +1,23 @@
+{
+  "config": "S-BL",
+  "task_id": "I7",
+  "task_title": "Extend audit logging coverage",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 246,
+  "tests_after_failed": 0,
+  "cost_usd": 1.8390535,
+  "num_turns": 43,
+  "duration_ms": 836626,
+  "session_id": "98418625-c0f8-4a6f-a532-8e63d71e5ee7",
+  "total_tool_calls": 82,
+  "tool_stats": {
+    "Agent": 2,
+    "Bash": 8,
+    "Read": 60,
+    "ToolSearch": 1,
+    "TodoWrite": 1,
+    "Edit": 4,
+    "Write": 6
+  }
+}

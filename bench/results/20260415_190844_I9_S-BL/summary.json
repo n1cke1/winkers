@@ -1,0 +1,24 @@
+{
+  "config": "S-BL",
+  "task_id": "I9",
+  "task_title": "Audit soft-delete consistency",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 253,
+  "tests_after_failed": 0,
+  "cost_usd": 1.7159754499999993,
+  "num_turns": 43,
+  "duration_ms": 680245,
+  "session_id": "3afdc370-7b5b-435b-8b99-28c7e5f0a00e",
+  "total_tool_calls": 83,
+  "tool_stats": {
+    "Agent": 3,
+    "ToolSearch": 3,
+    "Bash": 12,
+    "Read": 54,
+    "Glob": 1,
+    "TodoWrite": 1,
+    "Edit": 8,
+    "Write": 1
+  }
+}

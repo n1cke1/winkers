@@ -1,0 +1,23 @@
+{
+  "config": "H-WNK",
+  "task_id": "I7",
+  "task_title": "Extend audit logging coverage",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 0,
+  "tests_after_failed": 1,
+  "cost_usd": 0.5965940500000001,
+  "num_turns": 51,
+  "duration_ms": 1164049,
+  "session_id": "599d58a9-68e7-47e6-af54-e43fc3c3e52b",
+  "total_tool_calls": 62,
+  "tool_stats": {
+    "mcp__winkers__orient": 1,
+    "Glob": 7,
+    "Read": 17,
+    "mcp__winkers__before_create": 1,
+    "Edit": 29,
+    "Bash": 4,
+    "Write": 3
+  }
+}

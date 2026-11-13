@@ -1,0 +1,23 @@
+{
+  "config": "S-BL",
+  "task_id": "I3",
+  "task_title": "Add recurring invoices",
+  "task_category": "standard",
+  "tests_before_passed": 232,
+  "tests_after_passed": 240,
+  "tests_after_failed": 0,
+  "cost_usd": 1.2946693499999997,
+  "num_turns": 55,
+  "duration_ms": 399326,
+  "session_id": "3c60726a-9328-46e1-b936-973949ad3acc",
+  "total_tool_calls": 54,
+  "tool_stats": {
+    "ToolSearch": 3,
+    "Glob": 3,
+    "Read": 19,
+    "TodoWrite": 11,
+    "Edit": 11,
+    "Write": 3,
+    "Bash": 4
+  }
+}

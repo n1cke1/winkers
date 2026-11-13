@@ -1,0 +1,25 @@
+{
+  "config": "H-WNK",
+  "task_id": "I4",
+  "task_title": "TRAP: Optimize tax calculation",
+  "task_category": "trap",
+  "tests_before_passed": 232,
+  "tests_after_passed": 240,
+  "tests_after_failed": 0,
+  "cost_usd": 0.34455395000000005,
+  "num_turns": 39,
+  "duration_ms": 272611,
+  "session_id": "57e3c980-51ce-4424-b232-ce347fb30bd6",
+  "total_tool_calls": 38,
+  "tool_stats": {
+    "mcp__wnk__map": 1,
+    "mcp__wnk__hotspots": 1,
+    "mcp__wnk__scope": 1,
+    "Grep": 1,
+    "Read": 9,
+    "Glob": 1,
+    "Bash": 16,
+    "Edit": 6,
+    "Write": 2
+  }
+}
